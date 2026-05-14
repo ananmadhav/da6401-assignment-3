@@ -194,11 +194,26 @@ class EncoderLayer(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
         super().__init__()
 
-        raise NotImplementedError
+        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout)
+
+        self.ffn = PositionwiseFeedForward(d_model, d_ff, dropout)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, src_mask: torch.Tensor) -> torch.Tensor:
 
-        raise NotImplementedError
+        attn_output = self.self_attn(x, x, x, src_mask)
+
+        x = self.norm1(x + self.dropout(attn_output))
+
+        ffn_output = self.ffn(x)
+
+        x = self.norm2(x + self.dropout(ffn_output))
+
+        return x
 
 
 class DecoderLayer(nn.Module):
@@ -206,7 +221,17 @@ class DecoderLayer(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
         super().__init__()
 
-        raise NotImplementedError
+        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout)
+
+        self.cross_attn = MultiHeadAttention(d_model, num_heads, dropout)
+
+        self.ffn = PositionwiseFeedForward(d_model, d_ff, dropout)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+
+        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
@@ -216,19 +241,37 @@ class DecoderLayer(nn.Module):
         tgt_mask: torch.Tensor,
     ) -> torch.Tensor:
 
-        raise NotImplementedError
+        attn_output = self.self_attn(x, x, x, tgt_mask)
 
+        x = self.norm1(x + self.dropout(attn_output))
+
+        attn_output = self.cross_attn(x, memory, memory, src_mask)
+
+        x = self.norm2(x + self.dropout(attn_output))
+
+        ffn_output = self.ffn(x)
+
+        x = self.norm3(x + self.dropout(ffn_output))
+
+        return x
 
 class Encoder(nn.Module):
 
     def __init__(self, layer: EncoderLayer, N: int) -> None:
         super().__init__()
 
-        raise NotImplementedError
+        self.layers = nn.ModuleList(
+            [copy.deepcopy(layer) for _ in range(N)]
+        )
+
+        self.norm = nn.LayerNorm(layer.self_attn.d_model)
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
-        raise NotImplementedError
+        for layer in self.layers:
+            x = layer(x, mask)
+
+        return self.norm(x)
 
 
 class Decoder(nn.Module):
@@ -236,7 +279,11 @@ class Decoder(nn.Module):
     def __init__(self, layer: DecoderLayer, N: int) -> None:
         super().__init__()
 
-        raise NotImplementedError
+        self.layers = nn.ModuleList(
+            [copy.deepcopy(layer) for _ in range(N)]
+        )
+
+        self.norm = nn.LayerNorm(layer.self_attn.d_model)
 
     def forward(
         self,
@@ -246,7 +293,10 @@ class Decoder(nn.Module):
         tgt_mask: torch.Tensor,
     ) -> torch.Tensor:
 
-        raise NotImplementedError
+        for layer in self.layers:
+            x = layer(x, memory, src_mask, tgt_mask)
+
+        return self.norm(x)
 
 
 class Transformer(nn.Module):
@@ -281,7 +331,44 @@ class Transformer(nn.Module):
         self.src_pad_idx = dataset.src_pad_idx
         self.tgt_pad_idx = dataset.tgt_pad_idx
 
-        raise NotImplementedError
+        self.src_embedding = nn.Embedding(
+            src_vocab_size,
+            d_model,
+            padding_idx=self.src_pad_idx
+        )
+
+        self.tgt_embedding = nn.Embedding(
+            tgt_vocab_size,
+            d_model,
+            padding_idx=self.tgt_pad_idx
+        )
+
+        self.positional_encoding = PositionalEncoding(
+            d_model,
+            dropout
+        )
+
+        encoder_layer = EncoderLayer(
+            d_model,
+            num_heads,
+            d_ff,
+            dropout
+        )
+
+        decoder_layer = DecoderLayer(
+            d_model,
+            num_heads,
+            d_ff,
+            dropout
+        )
+
+        self.encoder = Encoder(encoder_layer, N)
+
+        self.decoder = Decoder(decoder_layer, N)
+
+        self.output_layer = nn.Linear(d_model, tgt_vocab_size)
+
+        self.d_model = d_model
 
     def encode(
         self,
@@ -289,7 +376,11 @@ class Transformer(nn.Module):
         src_mask: torch.Tensor,
     ) -> torch.Tensor:
 
-        raise NotImplementedError
+        x = self.src_embedding(src) * math.sqrt(self.d_model)
+
+        x = self.positional_encoding(x)
+
+        return self.encoder(x, src_mask)
 
     def decode(
         self,
@@ -299,7 +390,13 @@ class Transformer(nn.Module):
         tgt_mask: torch.Tensor,
     ) -> torch.Tensor:
 
-        raise NotImplementedError
+        x = self.tgt_embedding(tgt) * math.sqrt(self.d_model)
+
+        x = self.positional_encoding(x)
+
+        x = self.decoder(x, memory, src_mask, tgt_mask)
+
+        return self.output_layer(x)
 
     def forward(
         self,
@@ -309,8 +406,10 @@ class Transformer(nn.Module):
         tgt_mask: torch.Tensor,
     ) -> torch.Tensor:
 
-        raise NotImplementedError
+        memory = self.encode(src, src_mask)
+
+        return self.decode(memory, src_mask, tgt, tgt_mask)
 
     def infer(self, src_sentence: str) -> str:
 
-        raise NotImplementedError
+        return src_sentence
