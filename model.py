@@ -37,25 +37,19 @@ def scaled_dot_product_attention(
     V: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute Scaled Dot-Product Attention.
 
-        Attention(Q, K, V) = softmax( Q·Kᵀ / √dₖ ) · V
+    d_k = Q.size(-1)
 
-    Args:
-        Q    : Query tensor,  shape (..., seq_q, d_k)
-        K    : Key tensor,    shape (..., seq_k, d_k)
-        V    : Value tensor,  shape (..., seq_k, d_v)
-        mask : Optional Boolean mask, shape broadcastable to
-               (..., seq_q, seq_k).
-               Positions where mask is True are MASKED OUT
-               (set to -inf before softmax).
+    scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
 
-    Returns:
-        output : Attended output,   shape (..., seq_q, d_v)
-        attn_w : Attention weights, shape (..., seq_q, seq_k)
-    """
-    raise NotImplementedError
+    if mask is not None:
+        scores = scores.masked_fill(mask, float('-inf'))
+
+    attn_weights = torch.softmax(scores, dim=-1)
+
+    output = torch.matmul(attn_weights, V)
+
+    return output, attn_weights
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -106,86 +100,114 @@ def make_tgt_mask(
 # ══════════════════════════════════════════════════════════════════════
 
 class MultiHeadAttention(nn.Module):
-    """
-    Multi-Head Attention as in "Attention Is All You Need", §3.2.2.
-
-        MultiHead(Q,K,V) = Concat(head_1,...,head_h) · W_O
-        head_i = Attention(Q·W_Qi, K·W_Ki, V·W_Vi)
-
-    You are NOT allowed to use torch.nn.MultiheadAttention.
-
-    Args:
-        d_model   (int)  : Total model dimensionality. Must be divisible by num_heads.
-        num_heads (int)  : Number of parallel attention heads h.
-        dropout   (float): Dropout probability applied to attention weights.
-    """
 
     def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1) -> None:
         super().__init__()
-        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
 
-        self.d_model   = d_model
+        assert d_model % num_heads == 0
+
+        self.d_model = d_model
         self.num_heads = num_heads
-        self.d_k       = d_model // num_heads   # depth per head
-        raise NotImplementedError
-    
+        self.d_k = d_model // num_heads
+
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+
+        self.W_o = nn.Linear(d_model, d_model)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def split_heads(self, x):
+
+        batch_size, seq_len, d_model = x.size()
+
+        x = x.view(
+            batch_size,
+            seq_len,
+            self.num_heads,
+            self.d_k
+        )
+
+        return x.transpose(1, 2)
+
+    def combine_heads(self, x):
+
+        batch_size, num_heads, seq_len, d_k = x.size()
+
+        x = x.transpose(1, 2).contiguous()
+
+        return x.view(
+            batch_size,
+            seq_len,
+            self.d_model
+        )
+
     def forward(
         self,
         query: torch.Tensor,
-        key:   torch.Tensor,
+        key: torch.Tensor,
         value: torch.Tensor,
-        mask:  Optional[torch.Tensor] = None,
+        mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """
-        Args:
-            query : shape [batch, seq_q, d_model]
-            key   : shape [batch, seq_k, d_model]
-            value : shape [batch, seq_k, d_model]
-            mask  : Optional BoolTensor broadcastable to
-                    [batch, num_heads, seq_q, seq_k]
-                    True → masked out (attend nowhere)
 
-        Returns:
-            output : shape [batch, seq_q, d_model]
+        Q = self.W_q(query)
+        K = self.W_k(key)
+        V = self.W_v(value)
 
-        """
-        raise NotImplementedError
+        Q = self.split_heads(Q)
+        K = self.split_heads(K)
+        V = self.split_heads(V)
 
+        attention_output, attention_weights = scaled_dot_product_attention(
+            Q,
+            K,
+            V,
+            mask
+        )
+
+        attention_output = self.combine_heads(attention_output)
+
+        output = self.W_o(attention_output)
+
+        return output
+    
 
 # ══════════════════════════════════════════════════════════════════════
 #   POSITIONAL ENCODING  
 # ══════════════════════════════════════════════════════════════════════
 
 class PositionalEncoding(nn.Module):
-    """
-    Sinusoidal Positional Encoding as in "Attention Is All You Need", §3.5.
-
-    Args:
-        d_model  (int)  : Embedding dimensionality.
-        dropout  (float): Dropout applied after adding encodings.
-        max_len  (int)  : Maximum sequence length to pre-compute (default 5000).
-    """
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000) -> None:
         super().__init__()
-        raise NotImplementedError
+
+        self.dropout = nn.Dropout(dropout)
+
+        pe = torch.zeros(max_len, d_model)
+
+        position = torch.arange(0, max_len).unsqueeze(1)
+
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) *
+            (-math.log(10000.0) / d_model)
+        )
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        pe = pe.unsqueeze(0)
+
+        self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x : Input embeddings, shape [batch, seq_len, d_model]
 
-        Returns:
-            Tensor of same shape [batch, seq_len, d_model]
-            = x  +  PE[:, :seq_len, :]  
+        seq_len = x.size(1)
 
-        """
-        raise NotImplementedError
+        x = x + self.pe[:, :seq_len]
 
-
-# ══════════════════════════════════════════════════════════════════════
-#  FEED-FORWARD NETWORK 
-# ══════════════════════════════════════════════════════════════════════
+        return self.dropout(x)
 
 class PositionwiseFeedForward(nn.Module):
     """
