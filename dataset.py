@@ -12,8 +12,15 @@ class Multi30kDataset(Dataset):
         dataset = load_dataset("bentrevett/multi30k")
         self.dataset = dataset[split]
 
-        self.de_tokenizer = spacy.load("de_core_news_sm")
-        self.en_tokenizer = spacy.load("en_core_web_sm")
+        try:
+            self.de_tokenizer = spacy.load("de_core_news_sm")
+        except:
+            self.de_tokenizer = spacy.blank("de")
+
+        try:
+            self.en_tokenizer = spacy.load("en_core_web_sm")
+        except:
+            self.en_tokenizer = spacy.blank("en")
 
         self.special_tokens = ["<unk>", "<pad>", "<sos>", "<eos>"]
 
