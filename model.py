@@ -312,9 +312,12 @@ class Transformer(nn.Module):
         dropout: float = 0.1,
         checkpoint_path: str = None,
     ) -> None:
+
         super().__init__()
 
         dataset = Multi30kDataset(split="train")
+
+        self.dataset = dataset
 
         if src_vocab_size is None:
             src_vocab_size = len(dataset.src_vocab)
@@ -362,13 +365,45 @@ class Transformer(nn.Module):
             dropout
         )
 
-        self.encoder = Encoder(encoder_layer, N)
+        self.encoder = Encoder(
+            encoder_layer,
+            N
+        )
 
-        self.decoder = Decoder(decoder_layer, N)
+        self.decoder = Decoder(
+            decoder_layer,
+            N
+        )
 
-        self.output_layer = nn.Linear(d_model, tgt_vocab_size)
+        self.output_layer = nn.Linear(
+            d_model,
+            tgt_vocab_size
+        )
 
         self.d_model = d_model
+
+        checkpoint_path="checkpoint.pt"
+
+        if not os.path.exists(
+            checkpoint_path
+        ):
+
+            gdown.download(
+                id="12LFjvW0gHBgiFCUSn25FgsflJOaq57yf",
+                output=checkpoint_path,
+                quiet=False
+            )
+
+        checkpoint=torch.load(
+            checkpoint_path,
+            map_location="cpu"
+        )
+
+        self.load_state_dict(
+            checkpoint[
+                "model_state_dict"
+            ]
+        )
 
     def encode(
         self,
@@ -376,11 +411,18 @@ class Transformer(nn.Module):
         src_mask: torch.Tensor,
     ) -> torch.Tensor:
 
-        x = self.src_embedding(src) * math.sqrt(self.d_model)
+        x = self.src_embedding(
+            src
+        ) * math.sqrt(
+            self.d_model
+        )
 
-        x = self.positional_encoding(x)
+        x=self.positional_encoding(x)
 
-        return self.encoder(x, src_mask)
+        return self.encoder(
+            x,
+            src_mask
+        )
 
     def decode(
         self,
@@ -390,11 +432,22 @@ class Transformer(nn.Module):
         tgt_mask: torch.Tensor,
     ) -> torch.Tensor:
 
-        x = self.tgt_embedding(tgt) * math.sqrt(self.d_model)
+        x=self.tgt_embedding(
+            tgt
+        ) * math.sqrt(
+            self.d_model
+        )
 
-        x = self.positional_encoding(x)
+        x=self.positional_encoding(
+            x
+        )
 
-        x = self.decoder(x, memory, src_mask, tgt_mask)
+        x=self.decoder(
+            x,
+            memory,
+            src_mask,
+            tgt_mask
+        )
 
         return self.output_layer(x)
 
@@ -406,10 +459,90 @@ class Transformer(nn.Module):
         tgt_mask: torch.Tensor,
     ) -> torch.Tensor:
 
-        memory = self.encode(src, src_mask)
+        memory=self.encode(
+            src,
+            src_mask
+        )
 
-        return self.decode(memory, src_mask, tgt, tgt_mask)
+        return self.decode(
+            memory,
+            src_mask,
+            tgt,
+            tgt_mask
+        )
 
-    def infer(self, src_sentence: str) -> str:
+    def infer(
+        self,
+        src_sentence:str
+    ):
 
-        return src_sentence
+        self.eval()
+
+        tokens=["<sos>"]
+
+        tokens += [
+            t.text.lower()
+            for t in self.dataset.de_tokenizer(
+                src_sentence
+            )
+        ]
+
+        tokens += ["<eos>"]
+
+        src_indices=[]
+
+        for token in tokens:
+
+            src_indices.append(
+                self.src_vocab.get(
+                    token,
+                    self.src_vocab["<unk>"]
+                )
+            )
+
+        src=torch.tensor(
+            src_indices,
+            dtype=torch.long
+        ).unsqueeze(0)
+
+        device=next(
+            self.parameters()
+        ).device
+
+        src=src.to(device)
+
+        src_mask=make_src_mask(
+            src,
+            self.src_pad_idx
+        )
+
+        from train import greedy_decode
+
+        prediction=greedy_decode(
+            self,
+            src,
+            src_mask,
+            max_len=100,
+            start_symbol=self.tgt_vocab["<sos>"],
+            end_symbol=self.tgt_vocab["<eos>"],
+            device=device
+        )
+
+        output=[]
+
+        for idx in prediction[0]:
+
+            word=self.tgt_itos[
+                idx.item()
+            ]
+
+            if word in [
+                "<sos>",
+                "<eos>",
+                "<pad>"
+            ]:
+                continue
+
+            output.append(word)
+
+        return " ".join(output)

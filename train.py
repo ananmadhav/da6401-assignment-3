@@ -6,7 +6,7 @@ from typing import Optional
 from nltk.translate.bleu_score import corpus_bleu
 from tqdm import tqdm
 import wandb
-
+from dataset import Multi30kDataset, collate_fn
 from model import Transformer, make_src_mask, make_tgt_mask
 from dataset import Multi30kDataset
 from lr_scheduler import NoamScheduler
@@ -366,15 +366,17 @@ def run_training_experiment():
         split="validation"
     )
 
-    train_loader = DataLoader(
+    train_loader=DataLoader(
         train_dataset,
         batch_size=32,
-        shuffle=True
+        shuffle=True,
+        collate_fn=collate_fn
     )
 
-    val_loader = DataLoader(
+    val_loader=DataLoader(
         val_dataset,
-        batch_size=32
+        batch_size=32,
+        collate_fn=collate_fn
     )
 
     model = Transformer().to(device)

@@ -5,4 +5,5 @@ scikit-learn
 wandb
 datasets
 spacy
-tqdm
+tqdmnltk
+gdown
