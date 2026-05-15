@@ -399,7 +399,9 @@ def run_training_experiment():
         model.tgt_pad_idx
     )
 
-    for epoch in range(20):
+    best_val=float("inf")
+
+    for epoch in range(10):
 
         train_loss = run_epoch(
             train_loader,
@@ -424,17 +426,27 @@ def run_training_experiment():
         )
 
         wandb.log({
-            "train_loss": train_loss,
-            "val_loss": val_loss
+
+            "train_loss":train_loss,
+
+            "val_loss":val_loss
+
         })
 
-        save_checkpoint(
-            model,
-            optimizer,
-            scheduler,
-            epoch
-        )
+        if val_loss < best_val:
 
+            best_val = val_loss
+
+            save_checkpoint(
+                model,
+                optimizer,
+                scheduler,
+                epoch
+            )
+
+            print(
+                f"Best checkpoint saved at epoch {epoch}"
+            )
 
 if __name__ == "__main__":
     run_training_experiment()
