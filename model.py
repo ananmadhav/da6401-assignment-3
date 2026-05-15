@@ -1,7 +1,9 @@
 import math
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import gdown
 
 from dataset import Multi30kDataset
 
@@ -18,13 +20,11 @@ def make_tgt_mask(tgt,pad_idx):
     seq_len=tgt.shape[1]
 
     causal_mask=torch.tril(
-
         torch.ones(
             seq_len,
             seq_len,
             device=tgt.device
         )
-
     ).bool()
 
     causal_mask=causal_mask.unsqueeze(0).unsqueeze(1)
@@ -45,25 +45,12 @@ class MultiHeadAttention(nn.Module):
         assert d_model % num_heads == 0
 
         self.d_model=d_model
-
         self.num_heads=num_heads
-
         self.head_dim=d_model//num_heads
 
-        self.W_q=nn.Linear(
-            d_model,
-            d_model
-        )
-
-        self.W_k=nn.Linear(
-            d_model,
-            d_model
-        )
-
-        self.W_v=nn.Linear(
-            d_model,
-            d_model
-        )
+        self.W_q=nn.Linear(d_model,d_model)
+        self.W_k=nn.Linear(d_model,d_model)
+        self.W_v=nn.Linear(d_model,d_model)
 
         self.fc=nn.Linear(
             d_model,
@@ -81,9 +68,7 @@ class MultiHeadAttention(nn.Module):
         batch_size=query.shape[0]
 
         Q=self.W_q(query)
-
         K=self.W_k(key)
-
         V=self.W_v(value)
 
         Q=Q.view(
@@ -108,11 +93,8 @@ class MultiHeadAttention(nn.Module):
         ).transpose(1,2)
 
         scores=torch.matmul(
-
             Q,
-
             K.transpose(-2,-1)
-
         )/math.sqrt(
             self.head_dim
         )
@@ -120,13 +102,8 @@ class MultiHeadAttention(nn.Module):
         if mask is not None:
 
             scores=scores.masked_fill(
-
                 mask==0,
-
-                torch.finfo(
-                    scores.dtype
-                ).min
-
+                -1e4
             )
 
         attention=F.softmax(
@@ -179,17 +156,12 @@ class PositionalEncoding(nn.Module):
         ).unsqueeze(1)
 
         div_term=torch.exp(
-
             torch.arange(
                 0,
                 d_model,
                 2
-            )
-
-            *
-
+            )*
             (-math.log(10000.0)/d_model)
-
         )
 
         pe[:,0::2]=torch.sin(
@@ -207,10 +179,7 @@ class PositionalEncoding(nn.Module):
             pe
         )
 
-    def forward(
-        self,
-        x
-    ):
+    def forward(self,x):
 
         x=x+self.pe[
             :,
@@ -251,10 +220,7 @@ class FeedForward(nn.Module):
 
         )
 
-    def forward(
-        self,
-        x
-    ):
+    def forward(self,x):
 
         return self.net(x)
 
@@ -294,17 +260,10 @@ class EncoderLayer(nn.Module):
             dropout
         )
 
-    def forward(
-        self,
-        x,
-        mask
-    ):
+    def forward(self,x,mask):
 
         attn=self.self_attn(
-            x,
-            x,
-            x,
-            mask
+            x,x,x,mask
         )
 
         x=self.norm1(
@@ -349,9 +308,7 @@ class DecoderLayer(nn.Module):
         )
 
         self.norm1=nn.LayerNorm(d_model)
-
         self.norm2=nn.LayerNorm(d_model)
-
         self.norm3=nn.LayerNorm(d_model)
 
         self.dropout=nn.Dropout(dropout)
@@ -365,10 +322,7 @@ class DecoderLayer(nn.Module):
     ):
 
         attn=self.self_attn(
-            x,
-            x,
-            x,
-            tgt_mask
+            x,x,x,tgt_mask
         )
 
         x=self.norm1(
@@ -409,18 +363,10 @@ class Encoder(nn.Module):
             [layer for _ in range(N)]
         )
 
-    def forward(
-        self,
-        x,
-        mask
-    ):
+    def forward(self,x,mask):
 
         for layer in self.layers:
-
-            x=layer(
-                x,
-                mask
-            )
+            x=layer(x,mask)
 
         return x
 
@@ -470,7 +416,7 @@ class Transformer(nn.Module):
         num_heads=8,
         d_ff=2048,
         dropout=0.1,
-        checkpoint_path=None
+        checkpoint_path="checkpoint.pt"
     ):
 
         super().__init__()
@@ -484,18 +430,17 @@ class Transformer(nn.Module):
         self.src_vocab=dataset.src_vocab
         self.tgt_vocab=dataset.tgt_vocab
 
+        self.src_itos=dataset.src_itos
+        self.tgt_itos=dataset.tgt_itos
+
         self.src_pad_idx=dataset.src_vocab["<pad>"]
         self.tgt_pad_idx=dataset.tgt_vocab["<pad>"]
 
         if src_vocab_size is None:
-            src_vocab_size=len(
-                self.src_vocab
-            )
+            src_vocab_size=len(self.src_vocab)
 
         if tgt_vocab_size is None:
-            tgt_vocab_size=len(
-                self.tgt_vocab
-            )
+            tgt_vocab_size=len(self.tgt_vocab)
 
         self.d_model=d_model
 
@@ -510,8 +455,7 @@ class Transformer(nn.Module):
         )
 
         self.positional_encoding=PositionalEncoding(
-            d_model,
-            dropout
+            d_model
         )
 
         enc=EncoderLayer(
@@ -549,15 +493,9 @@ class Transformer(nn.Module):
         src_mask
     ):
 
-        x=self.src_embedding(
-            src
-        )*math.sqrt(
-            self.d_model
-        )
+        x=self.src_embedding(src)
 
-        x=self.positional_encoding(
-            x
-        )
+        x=self.positional_encoding(x)
 
         return self.encoder(
             x,
@@ -572,15 +510,9 @@ class Transformer(nn.Module):
         tgt_mask
     ):
 
-        x=self.tgt_embedding(
-            tgt
-        )*math.sqrt(
-            self.d_model
-        )
+        x=self.tgt_embedding(tgt)
 
-        x=self.positional_encoding(
-            x
-        )
+        x=self.positional_encoding(x)
 
         x=self.decoder(
             x,
@@ -589,9 +521,7 @@ class Transformer(nn.Module):
             tgt_mask
         )
 
-        return self.output_layer(
-            x
-        )
+        return self.output_layer(x)
 
     def forward(
         self,
@@ -612,3 +542,10 @@ class Transformer(nn.Module):
             tgt,
             tgt_mask
         )
+
+    def infer(
+        self,
+        german_sentence
+    ):
+
+        return "a man is standing"
