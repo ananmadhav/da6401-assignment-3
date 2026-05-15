@@ -135,14 +135,14 @@ def run_epoch(
 
 
 def greedy_decode(
-    model: Transformer,
-    src: torch.Tensor,
-    src_mask: torch.Tensor,
-    max_len: int,
-    start_symbol: int,
-    end_symbol: int,
-    device: str = "cpu",
-) -> torch.Tensor:
+    model,
+    src,
+    src_mask,
+    max_len,
+    start_symbol,
+    end_symbol,
+    device="cpu"
+):
 
     memory = model.encode(
         src,
@@ -156,45 +156,50 @@ def greedy_decode(
         device=device
     ).fill_(start_symbol)
 
-    for _ in range(max_len - 1):
+    model.eval()
 
-        tgt_mask = make_tgt_mask(
-            ys,
-            model.tgt_pad_idx
-        )
+    with torch.no_grad():
 
-        out = model.decode(
-            memory,
-            src_mask,
-            ys,
-            tgt_mask
-        )
+        for _ in range(min(max_len,30)):
 
-        prob = out[:, -1]
-
-        next_word = torch.argmax(
-            prob,
-            dim=1
-        ).item()
-
-        ys = torch.cat(
-            [
+            tgt_mask = make_tgt_mask(
                 ys,
-                torch.ones(
-                    1,
-                    1,
-                    dtype=torch.long,
-                    device=device
-                ).fill_(next_word)
-            ],
-            dim=1
-        )
+                model.tgt_pad_idx
+            )
 
-        if next_word == end_symbol:
-            break
+            out = model.decode(
+                memory,
+                src_mask,
+                ys,
+                tgt_mask
+            )
+
+            next_word = torch.argmax(
+                out[:, -1],
+                dim=1
+            ).item()
+
+            if next_word in [
+                end_symbol,
+                model.tgt_vocab["<pad>"]
+            ]:
+                break
+
+            ys = torch.cat(
+                [
+                    ys,
+                    torch.tensor(
+                        [[next_word]],
+                        device=device
+                    )
+                ],
+                dim=1
+            )
+
+            if ys.size(1)>=30:
+                break
 
     return ys
-
 
 def evaluate_bleu(
     model: Transformer,
