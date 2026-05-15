@@ -305,13 +305,13 @@ class Transformer(nn.Module):
         self,
         src_vocab_size: int = None,
         tgt_vocab_size: int = None,
-        d_model: int = 512,
-        N: int = 6,
-        num_heads: int = 8,
-        d_ff: int = 2048,
+        d_model: int = 256,
+        N: int = 4,
+        num_heads: int = 4,
+        d_ff: int = 1024,
         dropout: float = 0.1,
         checkpoint_path: str = None,
-    ) -> None:
+    ):
 
         super().__init__()
 
@@ -331,8 +331,8 @@ class Transformer(nn.Module):
         self.src_itos = dataset.src_itos
         self.tgt_itos = dataset.tgt_itos
 
-        self.src_pad_idx = dataset.src_pad_idx
-        self.tgt_pad_idx = dataset.tgt_pad_idx
+        self.src_pad_idx = dataset.src_vocab["<pad>"]
+        self.tgt_pad_idx = dataset.tgt_vocab["<pad>"]
 
         self.src_embedding = nn.Embedding(
             src_vocab_size,
@@ -382,42 +382,48 @@ class Transformer(nn.Module):
 
         self.d_model = d_model
 
-        checkpoint_path="checkpoint.pt"
+        if checkpoint_path is not None:
 
-        if not os.path.exists(
-            checkpoint_path
-        ):
+            import os
+            import gdown
 
-            gdown.download(
-                id="12LFjvW0gHBgiFCUSn25FgsflJOaq57yf",
-                output=checkpoint_path,
-                quiet=False
+            if not os.path.exists(
+                checkpoint_path
+            ):
+
+                gdown.download(
+                    id="12LFjvW0gHBgiFCUSn25FgsflJOaq57yf",
+                    output=checkpoint_path,
+                    quiet=False
+                )
+
+            checkpoint=torch.load(
+                checkpoint_path,
+                map_location="cpu"
             )
 
-        checkpoint=torch.load(
-            checkpoint_path,
-            map_location="cpu"
-        )
-
-        self.load_state_dict(
-            checkpoint[
-                "model_state_dict"
-            ]
-        )
+            self.load_state_dict(
+                checkpoint[
+                    "model_state_dict"
+                ],
+                strict=False
+            )
 
     def encode(
         self,
-        src: torch.Tensor,
-        src_mask: torch.Tensor,
-    ) -> torch.Tensor:
+        src,
+        src_mask
+    ):
 
-        x = self.src_embedding(
+        x=self.src_embedding(
             src
-        ) * math.sqrt(
+        )*math.sqrt(
             self.d_model
         )
 
-        x=self.positional_encoding(x)
+        x=self.positional_encoding(
+            x
+        )
 
         return self.encoder(
             x,
@@ -426,15 +432,15 @@ class Transformer(nn.Module):
 
     def decode(
         self,
-        memory: torch.Tensor,
-        src_mask: torch.Tensor,
-        tgt: torch.Tensor,
-        tgt_mask: torch.Tensor,
-    ) -> torch.Tensor:
+        memory,
+        src_mask,
+        tgt,
+        tgt_mask
+    ):
 
         x=self.tgt_embedding(
             tgt
-        ) * math.sqrt(
+        )*math.sqrt(
             self.d_model
         )
 
@@ -449,15 +455,17 @@ class Transformer(nn.Module):
             tgt_mask
         )
 
-        return self.output_layer(x)
+        return self.output_layer(
+            x
+        )
 
     def forward(
         self,
-        src: torch.Tensor,
-        tgt: torch.Tensor,
-        src_mask: torch.Tensor,
-        tgt_mask: torch.Tensor,
-    ) -> torch.Tensor:
+        src,
+        tgt,
+        src_mask,
+        tgt_mask
+    ):
 
         memory=self.encode(
             src,
@@ -473,7 +481,7 @@ class Transformer(nn.Module):
 
     def infer(
         self,
-        src_sentence:str
+        src_sentence
     ):
 
         self.eval()
@@ -481,10 +489,14 @@ class Transformer(nn.Module):
         tokens=["<sos>"]
 
         tokens += [
+
             t.text.lower()
-            for t in self.dataset.de_tokenizer(
+
+            for t in
+            self.dataset.de_tokenizer(
                 src_sentence
             )
+
         ]
 
         tokens += ["<eos>"]
@@ -494,22 +506,32 @@ class Transformer(nn.Module):
         for token in tokens:
 
             src_indices.append(
+
                 self.src_vocab.get(
+
                     token,
-                    self.src_vocab["<unk>"]
+
+                    self.src_vocab[
+                        "<unk>"
+                    ]
+
                 )
+
             )
 
         src=torch.tensor(
-            src_indices,
-            dtype=torch.long
-        ).unsqueeze(0)
+            src_indices
+        ).unsqueeze(
+            0
+        )
 
         device=next(
             self.parameters()
         ).device
 
-        src=src.to(device)
+        src=src.to(
+            device
+        )
 
         src_mask=make_src_mask(
             src,
@@ -519,30 +541,53 @@ class Transformer(nn.Module):
         from train import greedy_decode
 
         prediction=greedy_decode(
+
             self,
+
             src,
+
             src_mask,
-            max_len=100,
-            start_symbol=self.tgt_vocab["<sos>"],
-            end_symbol=self.tgt_vocab["<eos>"],
+
+            max_len=40,
+
+            start_symbol=
+            self.tgt_vocab[
+                "<sos>"
+            ],
+
+            end_symbol=
+            self.tgt_vocab[
+                "<eos>"
+            ],
+
             device=device
+
         )
 
-        output=[]
+        words=[]
 
-        for idx in prediction[0]:
+        for idx in prediction[
+            0
+        ]:
 
             word=self.tgt_itos[
                 idx.item()
             ]
 
             if word in [
+
                 "<sos>",
                 "<eos>",
                 "<pad>"
+
             ]:
+
                 continue
 
-            output.append(word)
+            words.append(
+                word
+            )
 
-        return " ".join(output)
+        return " ".join(
+            words
+        )
