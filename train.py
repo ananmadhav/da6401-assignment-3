@@ -174,9 +174,7 @@ def greedy_decode(
 
     with torch.no_grad():
 
-        for _ in range(
-            min(max_len,30)
-        ):
+        for _ in range(max_len):
 
             tgt_mask=make_tgt_mask(
                 ys,

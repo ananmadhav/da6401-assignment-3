@@ -1,5 +1,6 @@
 import math
 import os
+import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,11 +34,7 @@ def make_tgt_mask(tgt,pad_idx):
 
 class MultiHeadAttention(nn.Module):
 
-    def __init__(
-        self,
-        d_model,
-        num_heads
-    ):
+    def __init__(self,d_model,num_heads):
 
         super().__init__()
 
@@ -47,25 +44,11 @@ class MultiHeadAttention(nn.Module):
         self.num_heads=num_heads
         self.head_dim=d_model//num_heads
 
-        self.W_q=nn.Linear(
-            d_model,
-            d_model
-        )
+        self.W_q=nn.Linear(d_model,d_model)
+        self.W_k=nn.Linear(d_model,d_model)
+        self.W_v=nn.Linear(d_model,d_model)
 
-        self.W_k=nn.Linear(
-            d_model,
-            d_model
-        )
-
-        self.W_v=nn.Linear(
-            d_model,
-            d_model
-        )
-
-        self.fc=nn.Linear(
-            d_model,
-            d_model
-        )
+        self.fc=nn.Linear(d_model,d_model)
 
     def forward(
         self,
@@ -75,28 +58,28 @@ class MultiHeadAttention(nn.Module):
         mask=None
     ):
 
-        batch_size=query.shape[0]
+        B=query.shape[0]
 
         Q=self.W_q(query)
         K=self.W_k(key)
         V=self.W_v(value)
 
         Q=Q.view(
-            batch_size,
+            B,
             -1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
         K=K.view(
-            batch_size,
+            B,
             -1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
         V=V.view(
-            batch_size,
+            B,
             -1,
             self.num_heads,
             self.head_dim
@@ -111,28 +94,26 @@ class MultiHeadAttention(nn.Module):
 
         if mask is not None:
 
-            mask=mask.to(
-                dtype=torch.bool,
-                device=scores.device
+            mask=mask.bool()
+
+            fill_value = (
+                -1e4
+                if scores.dtype==torch.float16
+                else -1e9
             )
 
             scores=scores.masked_fill(
                 ~mask,
-                float("-inf")
+                fill_value
             )
 
-        attention=F.softmax(
+        attn=F.softmax(
             scores,
             dim=-1
         )
 
-        attention=torch.nan_to_num(
-            attention,
-            nan=0.0
-        )
-
         out=torch.matmul(
-            attention,
+            attn,
             V
         )
 
@@ -142,7 +123,7 @@ class MultiHeadAttention(nn.Module):
         ).contiguous()
 
         out=out.view(
-            batch_size,
+            B,
             -1,
             self.d_model
         )
@@ -171,7 +152,6 @@ class PositionalEncoding(nn.Module):
         )
 
         position=torch.arange(
-            0,
             max_len
         ).unsqueeze(1)
 
@@ -226,9 +206,7 @@ class FeedForward(nn.Module):
                 d_ff
             ),
             nn.ReLU(),
-            nn.Dropout(
-                dropout
-            ),
+            nn.Dropout(dropout),
             nn.Linear(
                 d_ff,
                 d_model
@@ -244,7 +222,7 @@ class EncoderLayer(nn.Module):
     def __init__(
         self,
         d_model,
-        num_heads,
+        heads,
         d_ff,
         dropout
     ):
@@ -253,7 +231,7 @@ class EncoderLayer(nn.Module):
 
         self.self_attn=MultiHeadAttention(
             d_model,
-            num_heads
+            heads
         )
 
         self.ff=FeedForward(
@@ -265,22 +243,22 @@ class EncoderLayer(nn.Module):
         self.norm1=nn.LayerNorm(d_model)
         self.norm2=nn.LayerNorm(d_model)
 
-        self.dropout=nn.Dropout(dropout)
+        self.drop=nn.Dropout(dropout)
 
     def forward(self,x,mask):
 
-        attn=self.self_attn(
-            x,x,x,mask
-        )
-
         x=self.norm1(
-            x+self.dropout(attn)
+            x+self.drop(
+                self.self_attn(
+                    x,x,x,mask
+                )
+            )
         )
-
-        ff=self.ff(x)
 
         x=self.norm2(
-            x+self.dropout(ff)
+            x+self.drop(
+                self.ff(x)
+            )
         )
 
         return x
@@ -291,7 +269,7 @@ class DecoderLayer(nn.Module):
     def __init__(
         self,
         d_model,
-        num_heads,
+        heads,
         d_ff,
         dropout
     ):
@@ -300,12 +278,12 @@ class DecoderLayer(nn.Module):
 
         self.self_attn=MultiHeadAttention(
             d_model,
-            num_heads
+            heads
         )
 
         self.cross_attn=MultiHeadAttention(
             d_model,
-            num_heads
+            heads
         )
 
         self.ff=FeedForward(
@@ -318,7 +296,7 @@ class DecoderLayer(nn.Module):
         self.norm2=nn.LayerNorm(d_model)
         self.norm3=nn.LayerNorm(d_model)
 
-        self.dropout=nn.Dropout(dropout)
+        self.drop=nn.Dropout(dropout)
 
     def forward(
         self,
@@ -328,29 +306,29 @@ class DecoderLayer(nn.Module):
         tgt_mask
     ):
 
-        attn=self.self_attn(
-            x,x,x,tgt_mask
-        )
-
         x=self.norm1(
-            x+self.dropout(attn)
-        )
-
-        attn=self.cross_attn(
-            x,
-            memory,
-            memory,
-            src_mask
+            x+self.drop(
+                self.self_attn(
+                    x,x,x,tgt_mask
+                )
+            )
         )
 
         x=self.norm2(
-            x+self.dropout(attn)
+            x+self.drop(
+                self.cross_attn(
+                    x,
+                    memory,
+                    memory,
+                    src_mask
+                )
+            )
         )
 
-        ff=self.ff(x)
-
         x=self.norm3(
-            x+self.dropout(ff)
+            x+self.drop(
+                self.ff(x)
+            )
         )
 
         return x
@@ -367,13 +345,16 @@ class Encoder(nn.Module):
         super().__init__()
 
         self.layers=nn.ModuleList(
-            [layer for _ in range(N)]
+            [
+                copy.deepcopy(layer)
+                for _ in range(N)
+            ]
         )
 
     def forward(self,x,mask):
 
-        for layer in self.layers:
-            x=layer(x,mask)
+        for l in self.layers:
+            x=l(x,mask)
 
         return x
 
@@ -389,7 +370,10 @@ class Decoder(nn.Module):
         super().__init__()
 
         self.layers=nn.ModuleList(
-            [layer for _ in range(N)]
+            [
+                copy.deepcopy(layer)
+                for _ in range(N)
+            ]
         )
 
     def forward(
@@ -400,9 +384,9 @@ class Decoder(nn.Module):
         tgt_mask
     ):
 
-        for layer in self.layers:
+        for l in self.layers:
 
-            x=layer(
+            x=l(
                 x,
                 memory,
                 src_mask,
@@ -440,16 +424,18 @@ class Transformer(nn.Module):
         self.src_itos=dataset.src_itos
         self.tgt_itos=dataset.tgt_itos
 
-        self.src_pad_idx=dataset.src_vocab["<pad>"]
-        self.tgt_pad_idx=dataset.tgt_vocab["<pad>"]
+        self.src_pad_idx=self.src_vocab["<pad>"]
+        self.tgt_pad_idx=self.tgt_vocab["<pad>"]
 
         if src_vocab_size is None:
-            src_vocab_size=len(self.src_vocab)
+            src_vocab_size=len(
+                self.src_vocab
+            )
 
         if tgt_vocab_size is None:
-            tgt_vocab_size=len(self.tgt_vocab)
-
-        self.d_model=d_model
+            tgt_vocab_size=len(
+                self.tgt_vocab
+            )
 
         self.src_embedding=nn.Embedding(
             src_vocab_size,
@@ -461,7 +447,7 @@ class Transformer(nn.Module):
             d_model
         )
 
-        self.positional_encoding=PositionalEncoding(
+        self.pos=PositionalEncoding(
             d_model
         )
 
@@ -479,26 +465,29 @@ class Transformer(nn.Module):
             dropout
         )
 
-        self.encoder=Encoder(enc,N)
-        self.decoder=Decoder(dec,N)
+        self.encoder=Encoder(
+            enc,
+            N
+        )
+
+        self.decoder=Decoder(
+            dec,
+            N
+        )
 
         self.output_layer=nn.Linear(
             d_model,
             tgt_vocab_size
         )
 
-        if checkpoint_path is not None:
+        if checkpoint_path:
 
             if not os.path.exists(
                 checkpoint_path
             ):
 
-                file_id="12LFjvW0gHBgiFCUSn25FgsflJOaq57yf"
-
-                url=f"https://drive.google.com/uc?id={file_id}"
-
                 gdown.download(
-                    url,
+                    "https://drive.google.com/uc?id=12LFjvW0gHBgiFCUSn25FgsflJOaq57yf",
                     checkpoint_path,
                     quiet=False
                 )
@@ -521,7 +510,7 @@ class Transformer(nn.Module):
 
         x=self.src_embedding(src)
 
-        x=self.positional_encoding(x)
+        x=self.pos(x)
 
         return self.encoder(
             x,
@@ -536,9 +525,11 @@ class Transformer(nn.Module):
         tgt_mask
     ):
 
-        x=self.tgt_embedding(tgt)
+        x=self.tgt_embedding(
+            tgt
+        )
 
-        x=self.positional_encoding(x)
+        x=self.pos(x)
 
         x=self.decoder(
             x,
@@ -574,11 +565,13 @@ class Transformer(nn.Module):
         german_sentence
     ):
 
+        from train import greedy_decode
+
         self.eval()
 
         tokens=["<sos>"]
 
-        tokens += [
+        tokens+=[
             t.text.lower()
             for t in
             self.dataset.de_tokenizer(
@@ -586,9 +579,9 @@ class Transformer(nn.Module):
             )
         ]
 
-        tokens += ["<eos>"]
+        tokens+=["<eos>"]
 
-        src_indices=[
+        ids=[
 
             self.src_vocab.get(
                 t,
@@ -600,7 +593,7 @@ class Transformer(nn.Module):
         ]
 
         src=torch.tensor(
-            src_indices
+            ids
         ).unsqueeze(0)
 
         device=next(
@@ -613,8 +606,6 @@ class Transformer(nn.Module):
             src,
             self.src_pad_idx
         )
-
-        from train import greedy_decode
 
         pred=greedy_decode(
             self,
@@ -630,17 +621,17 @@ class Transformer(nn.Module):
 
         for idx in pred[0]:
 
-            word=self.tgt_itos[
+            w=self.tgt_itos[
                 idx.item()
             ]
 
-            if word in [
+            if w in [
                 "<sos>",
                 "<eos>",
                 "<pad>"
             ]:
                 continue
 
-            words.append(word)
+            words.append(w)
 
         return " ".join(words)
