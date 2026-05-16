@@ -38,17 +38,31 @@ class MultiHeadAttention(nn.Module):
 
         super().__init__()
 
-        assert d_model % num_heads == 0
+        assert d_model % num_heads==0
 
         self.d_model=d_model
         self.num_heads=num_heads
         self.head_dim=d_model//num_heads
 
-        self.W_q=nn.Linear(d_model,d_model)
-        self.W_k=nn.Linear(d_model,d_model)
-        self.W_v=nn.Linear(d_model,d_model)
+        self.W_q=nn.Linear(
+            d_model,
+            d_model
+        )
 
-        self.fc=nn.Linear(d_model,d_model)
+        self.W_k=nn.Linear(
+            d_model,
+            d_model
+        )
+
+        self.W_v=nn.Linear(
+            d_model,
+            d_model
+        )
+
+        self.fc=nn.Linear(
+            d_model,
+            d_model
+        )
 
     def forward(
         self,
@@ -58,7 +72,7 @@ class MultiHeadAttention(nn.Module):
         mask=None
     ):
 
-        B=query.shape[0]
+        B=query.size(0)
 
         Q=self.W_q(query)
         K=self.W_k(key)
@@ -88,38 +102,46 @@ class MultiHeadAttention(nn.Module):
         scores=torch.matmul(
             Q,
             K.transpose(-2,-1)
-        )/math.sqrt(
+        )
+
+        scores=scores/math.sqrt(
             self.head_dim
         )
 
+        scores=scores.float()
+
         if mask is not None:
 
-            mask=mask.expand(
-                -1,
-                self.num_heads,
-                -1,
-                -1
-            )
+            if mask.dim()==3:
+                mask=mask.unsqueeze(1)
+
+            mask=mask.bool()
 
             scores=scores.masked_fill(
-                mask==0,
-                torch.finfo(scores.dtype).min
+                ~mask,
+                -1e9
             )
 
-        attn=F.softmax(
+        attention=F.softmax(
             scores,
             dim=-1
         )
 
+        attention=attention.type_as(
+            V
+        )
+
         out=torch.matmul(
-            attn,
+            attention,
             V
         )
 
         out=out.transpose(
             1,
             2
-        ).contiguous()
+        )
+
+        out=out.contiguous()
 
         out=out.view(
             B,
@@ -128,7 +150,6 @@ class MultiHeadAttention(nn.Module):
         )
 
         return self.fc(out)
-
 
 class PositionalEncoding(nn.Module):
 
