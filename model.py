@@ -8,18 +8,17 @@ import gdown
 from dataset import Multi30kDataset
 
 
-def make_src_mask(src, pad_idx):
+def make_src_mask(src,pad_idx):
+    return (src!=pad_idx).unsqueeze(1).unsqueeze(2)
 
-    return (src != pad_idx).unsqueeze(1).unsqueeze(2)
 
+def make_tgt_mask(tgt,pad_idx):
 
-def make_tgt_mask(tgt, pad_idx):
+    tgt_pad_mask=(tgt!=pad_idx).unsqueeze(1).unsqueeze(2)
 
-    tgt_pad_mask = (tgt != pad_idx).unsqueeze(1).unsqueeze(2)
+    seq_len=tgt.shape[1]
 
-    seq_len = tgt.shape[1]
-
-    causal_mask = torch.tril(
+    causal_mask=torch.tril(
         torch.ones(
             seq_len,
             seq_len,
@@ -27,7 +26,7 @@ def make_tgt_mask(tgt, pad_idx):
         )
     ).bool()
 
-    causal_mask = causal_mask.unsqueeze(0).unsqueeze(1)
+    causal_mask=causal_mask.unsqueeze(0).unsqueeze(1)
 
     return tgt_pad_mask & causal_mask
 
@@ -44,26 +43,26 @@ class MultiHeadAttention(nn.Module):
 
         assert d_model % num_heads == 0
 
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.head_dim = d_model // num_heads
+        self.d_model=d_model
+        self.num_heads=num_heads
+        self.head_dim=d_model//num_heads
 
-        self.W_q = nn.Linear(
+        self.W_q=nn.Linear(
             d_model,
             d_model
         )
 
-        self.W_k = nn.Linear(
+        self.W_k=nn.Linear(
             d_model,
             d_model
         )
 
-        self.W_v = nn.Linear(
+        self.W_v=nn.Linear(
             d_model,
             d_model
         )
 
-        self.fc = nn.Linear(
+        self.fc=nn.Linear(
             d_model,
             d_model
         )
@@ -76,65 +75,73 @@ class MultiHeadAttention(nn.Module):
         mask=None
     ):
 
-        batch_size = query.shape[0]
+        batch_size=query.shape[0]
 
-        Q = self.W_q(query)
-        K = self.W_k(key)
-        V = self.W_v(value)
+        Q=self.W_q(query)
+        K=self.W_k(key)
+        V=self.W_v(value)
 
-        Q = Q.view(
+        Q=Q.view(
             batch_size,
             -1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
-        K = K.view(
+        K=K.view(
             batch_size,
             -1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
-        V = V.view(
+        V=V.view(
             batch_size,
             -1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
-        scores = torch.matmul(
+        scores=torch.matmul(
             Q,
             K.transpose(-2,-1)
-        ) / math.sqrt(
+        )/math.sqrt(
             self.head_dim
         )
 
         if mask is not None:
 
-            scores = scores.float()
-
-            scores = scores.masked_fill(
-                mask == 0,
-                -1e9
+            mask=mask.to(
+                dtype=torch.bool,
+                device=scores.device
             )
 
-        attention = F.softmax(
+            scores=scores.masked_fill(
+                ~mask,
+                float("-inf")
+            )
+
+        attention=F.softmax(
             scores,
             dim=-1
         )
 
-        out = torch.matmul(
+        attention=torch.nan_to_num(
+            attention,
+            nan=0.0
+        )
+
+        out=torch.matmul(
             attention,
             V
         )
 
-        out = out.transpose(
+        out=out.transpose(
             1,
             2
         ).contiguous()
 
-        out = out.view(
+        out=out.view(
             batch_size,
             -1,
             self.d_model
@@ -154,53 +161,47 @@ class PositionalEncoding(nn.Module):
 
         super().__init__()
 
-        self.dropout = nn.Dropout(
+        self.dropout=nn.Dropout(
             dropout
         )
 
-        pe = torch.zeros(
+        pe=torch.zeros(
             max_len,
             d_model
         )
 
-        position = torch.arange(
+        position=torch.arange(
             0,
             max_len
         ).unsqueeze(1)
 
-        div_term = torch.exp(
+        div_term=torch.exp(
             torch.arange(
                 0,
                 d_model,
                 2
-            ) *
-            (
-                -math.log(10000.0)
-                / d_model
-            )
+            )*
+            (-math.log(10000.0)/d_model)
         )
 
-        pe[:,0::2] = torch.sin(
-            position * div_term
+        pe[:,0::2]=torch.sin(
+            position*div_term
         )
 
-        pe[:,1::2] = torch.cos(
-            position * div_term
+        pe[:,1::2]=torch.cos(
+            position*div_term
         )
 
-        pe = pe.unsqueeze(0)
+        pe=pe.unsqueeze(0)
 
         self.register_buffer(
             "pe",
             pe
         )
 
-    def forward(
-        self,
-        x
-    ):
+    def forward(self,x):
 
-        x = x + self.pe[
+        x=x+self.pe[
             :,
             :x.size(1)
         ]
@@ -219,31 +220,22 @@ class FeedForward(nn.Module):
 
         super().__init__()
 
-        self.net = nn.Sequential(
-
+        self.net=nn.Sequential(
             nn.Linear(
                 d_model,
                 d_ff
             ),
-
             nn.ReLU(),
-
             nn.Dropout(
                 dropout
             ),
-
             nn.Linear(
                 d_ff,
                 d_model
             )
-
         )
 
-    def forward(
-        self,
-        x
-    ):
-
+    def forward(self,x):
         return self.net(x)
 
 
@@ -259,50 +251,36 @@ class EncoderLayer(nn.Module):
 
         super().__init__()
 
-        self.self_attn = MultiHeadAttention(
+        self.self_attn=MultiHeadAttention(
             d_model,
             num_heads
         )
 
-        self.ff = FeedForward(
+        self.ff=FeedForward(
             d_model,
             d_ff,
             dropout
         )
 
-        self.norm1 = nn.LayerNorm(
-            d_model
+        self.norm1=nn.LayerNorm(d_model)
+        self.norm2=nn.LayerNorm(d_model)
+
+        self.dropout=nn.Dropout(dropout)
+
+    def forward(self,x,mask):
+
+        attn=self.self_attn(
+            x,x,x,mask
         )
 
-        self.norm2 = nn.LayerNorm(
-            d_model
+        x=self.norm1(
+            x+self.dropout(attn)
         )
 
-        self.dropout = nn.Dropout(
-            dropout
-        )
+        ff=self.ff(x)
 
-    def forward(
-        self,
-        x,
-        mask
-    ):
-
-        attn = self.self_attn(
-            x,
-            x,
-            x,
-            mask
-        )
-
-        x = self.norm1(
-            x + self.dropout(attn)
-        )
-
-        ff = self.ff(x)
-
-        x = self.norm2(
-            x + self.dropout(ff)
+        x=self.norm2(
+            x+self.dropout(ff)
         )
 
         return x
@@ -392,18 +370,10 @@ class Encoder(nn.Module):
             [layer for _ in range(N)]
         )
 
-    def forward(
-        self,
-        x,
-        mask
-    ):
+    def forward(self,x,mask):
 
         for layer in self.layers:
-
-            x=layer(
-                x,
-                mask
-            )
+            x=layer(x,mask)
 
         return x
 
@@ -517,6 +487,32 @@ class Transformer(nn.Module):
             tgt_vocab_size
         )
 
+        if checkpoint_path is not None:
+
+            if not os.path.exists(
+                checkpoint_path
+            ):
+
+                file_id="12LFjvW0gHBgiFCUSn25FgsflJOaq57yf"
+
+                url=f"https://drive.google.com/uc?id={file_id}"
+
+                gdown.download(
+                    url,
+                    checkpoint_path,
+                    quiet=False
+                )
+
+            state=torch.load(
+                checkpoint_path,
+                map_location="cpu"
+            )
+
+            self.load_state_dict(
+                state["model_state_dict"],
+                strict=False
+            )
+
     def encode(
         self,
         src,
@@ -583,14 +579,11 @@ class Transformer(nn.Module):
         tokens=["<sos>"]
 
         tokens += [
-
             t.text.lower()
-
             for t in
             self.dataset.de_tokenizer(
                 german_sentence
             )
-
         ]
 
         tokens += ["<eos>"]
