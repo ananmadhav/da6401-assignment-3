@@ -305,7 +305,7 @@ def run_training_experiment():
         "inf"
     )
 
-    for epoch in range(20):
+    for epoch in range(30):
 
         train_loss=run_epoch(
             train_loader,

@@ -94,17 +94,16 @@ class MultiHeadAttention(nn.Module):
 
         if mask is not None:
 
-            mask=mask.bool()
-
-            fill_value = (
-                -1e4
-                if scores.dtype==torch.float16
-                else -1e9
+            mask=mask.expand(
+                -1,
+                self.num_heads,
+                -1,
+                -1
             )
 
             scores=scores.masked_fill(
-                ~mask,
-                fill_value
+                mask==0,
+                torch.finfo(scores.dtype).min
             )
 
         attn=F.softmax(
