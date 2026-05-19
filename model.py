@@ -1,15 +1,14 @@
 import math
-import os
 import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gdown
 
 from dataset import Multi30kDataset
 
 
 def make_src_mask(src,pad_idx):
+
     return (src!=pad_idx).unsqueeze(1).unsqueeze(2)
 
 
@@ -46,7 +45,9 @@ class MultiHeadAttention(nn.Module):
         assert d_model % num_heads==0
 
         self.d_model=d_model
+
         self.num_heads=num_heads
+
         self.head_dim=d_model//num_heads
 
         self.use_scaling=use_scaling
@@ -84,7 +85,9 @@ class MultiHeadAttention(nn.Module):
         B=query.size(0)
 
         Q=self.W_q(query)
+
         K=self.W_k(key)
+
         V=self.W_v(value)
 
         Q=Q.view(
@@ -116,14 +119,11 @@ class MultiHeadAttention(nn.Module):
                 self.head_dim
             )
 
-        scores=scores.float()
-
         if mask is not None:
 
             if mask.dim()==3:
-                mask=mask.unsqueeze(1)
 
-            mask=mask.bool()
+                mask=mask.unsqueeze(1)
 
             scores=scores.masked_fill(
                 ~mask,
@@ -139,10 +139,6 @@ class MultiHeadAttention(nn.Module):
             attention
             .detach()
             .cpu()
-        )
-
-        attention=attention.type_as(
-            V
         )
 
         out=torch.matmul(
@@ -166,7 +162,7 @@ class MultiHeadAttention(nn.Module):
         return self.fc(out)
 
 
-class PositionalEncoding(nn.Module):
+class SinusoidalPositionalEncoding(nn.Module):
 
     def __init__(
         self,
@@ -191,13 +187,17 @@ class PositionalEncoding(nn.Module):
         ).unsqueeze(1)
 
         div_term=torch.exp(
+
             torch.arange(
                 0,
                 d_model,
                 2
             )
+
             *
+
             (-math.log(10000.0)/d_model)
+
         )
 
         pe[:,0::2]=torch.sin(
@@ -215,12 +215,58 @@ class PositionalEncoding(nn.Module):
             pe
         )
 
-    def forward(self,x):
+    def forward(
+        self,
+        x
+    ):
 
         x=x+self.pe[
             :,
             :x.size(1)
         ]
+
+        return self.dropout(x)
+
+
+class LearnedPositionalEncoding(nn.Module):
+
+    def __init__(
+        self,
+        d_model,
+        max_len=5000,
+        dropout=0.1
+    ):
+
+        super().__init__()
+
+        self.embedding=nn.Embedding(
+            max_len,
+            d_model
+        )
+
+        self.dropout=nn.Dropout(
+            dropout
+        )
+
+    def forward(
+        self,
+        x
+    ):
+
+        B,L,_=x.shape
+
+        positions=torch.arange(
+            L,
+            device=x.device
+        )
+
+        positions=positions.unsqueeze(0)
+
+        pos=self.embedding(
+            positions
+        )
+
+        x=x+pos
 
         return self.dropout(x)
 
@@ -237,13 +283,29 @@ class FeedForward(nn.Module):
         super().__init__()
 
         self.net=nn.Sequential(
-            nn.Linear(d_model,d_ff),
+
+            nn.Linear(
+                d_model,
+                d_ff
+            ),
+
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_ff,d_model)
+
+            nn.Dropout(
+                dropout
+            ),
+
+            nn.Linear(
+                d_ff,
+                d_model
+            )
+
         )
 
-    def forward(self,x):
+    def forward(
+        self,
+        x
+    ):
 
         return self.net(x)
 
@@ -292,9 +354,13 @@ class EncoderLayer(nn.Module):
     ):
 
         x=self.norm1(
+
             x+self.drop(
                 self.self_attn(
-                    x,x,x,mask
+                    x,
+                    x,
+                    x,
+                    mask
                 )
             )
         )
@@ -340,7 +406,9 @@ class DecoderLayer(nn.Module):
         )
 
         self.norm1=nn.LayerNorm(d_model)
+
         self.norm2=nn.LayerNorm(d_model)
+
         self.norm3=nn.LayerNorm(d_model)
 
         self.drop=nn.Dropout(dropout)
@@ -405,6 +473,7 @@ class Encoder(nn.Module):
     ):
 
         for l in self.layers:
+
             x=l(x,mask)
 
         return x
@@ -436,6 +505,7 @@ class Decoder(nn.Module):
     ):
 
         for l in self.layers:
+
             x=l(
                 x,
                 memory,
@@ -449,16 +519,29 @@ class Decoder(nn.Module):
 class Transformer(nn.Module):
 
     def __init__(
+
         self,
+
         src_vocab_size=None,
+
         tgt_vocab_size=None,
+
         d_model=512,
+
         N=6,
+
         num_heads=8,
+
         d_ff=2048,
+
         dropout=0.1,
+
         use_scaling=True,
-        checkpoint_path="checkpoint.pt"
+
+        use_learned_pos=False,
+
+        checkpoint_path=None
+
     ):
 
         super().__init__()
@@ -472,29 +555,30 @@ class Transformer(nn.Module):
         self.src_vocab=dataset.src_vocab
         self.tgt_vocab=dataset.tgt_vocab
 
-        self.src_itos=dataset.src_itos
-        self.tgt_itos=dataset.tgt_itos
-
         self.src_pad_idx=self.src_vocab["<pad>"]
         self.tgt_pad_idx=self.tgt_vocab["<pad>"]
 
-        if src_vocab_size is None:
-            src_vocab_size=len(self.src_vocab)
-
-        if tgt_vocab_size is None:
-            tgt_vocab_size=len(self.tgt_vocab)
-
         self.src_embedding=nn.Embedding(
-            src_vocab_size,
+            len(self.src_vocab),
             d_model
         )
 
         self.tgt_embedding=nn.Embedding(
-            tgt_vocab_size,
+            len(self.tgt_vocab),
             d_model
         )
 
-        self.pos=PositionalEncoding(d_model)
+        if use_learned_pos:
+
+            self.pos=LearnedPositionalEncoding(
+                d_model
+            )
+
+        else:
+
+            self.pos=SinusoidalPositionalEncoding(
+                d_model
+            )
 
         enc=EncoderLayer(
             d_model,
@@ -513,11 +597,12 @@ class Transformer(nn.Module):
         )
 
         self.encoder=Encoder(enc,N)
+
         self.decoder=Decoder(dec,N)
 
         self.output_layer=nn.Linear(
             d_model,
-            tgt_vocab_size
+            len(self.tgt_vocab)
         )
 
     def encode(
@@ -527,6 +612,7 @@ class Transformer(nn.Module):
     ):
 
         x=self.src_embedding(src)
+
         x=self.pos(x)
 
         return self.encoder(
