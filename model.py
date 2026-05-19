@@ -72,78 +72,81 @@ class MultiHeadAttention(nn.Module):
         mask=None
     ):
 
-        B=query.size(0)
+        B = query.size(0)
 
-        Q=self.W_q(query)
-        K=self.W_k(key)
-        V=self.W_v(value)
+        Q = self.W_q(query)
+        K = self.W_k(key)
+        V = self.W_v(value)
 
-        Q=Q.view(
+        Q = Q.view(
             B,
             -1,
             self.num_heads,
             self.head_dim
-        ).transpose(1,2)
+        ).transpose(1, 2)
 
-        K=K.view(
+        K = K.view(
             B,
             -1,
             self.num_heads,
             self.head_dim
-        ).transpose(1,2)
+        ).transpose(1, 2)
 
-        V=V.view(
+        V = V.view(
             B,
             -1,
             self.num_heads,
             self.head_dim
-        ).transpose(1,2)
+        ).transpose(1, 2)
 
-        scores=torch.matmul(
+        scores = torch.matmul(
             Q,
-            K.transpose(-2,-1)
+            K.transpose(-2, -1)
         )
 
-        scores=scores/math.sqrt(
+        scores = scores / math.sqrt(
             self.head_dim
         )
-
-        scores=scores.float()
 
         if mask is not None:
 
-            if mask.dim()==3:
-                mask=mask.unsqueeze(1)
 
-            mask=mask.bool()
+            if mask.dim() == 3:
+                mask = mask.unsqueeze(1)
 
-            scores=scores.masked_fill(
+            mask = mask.bool()
+
+           
+            scores = scores.masked_fill(
                 ~mask,
-                -1e9
+                float("-inf")
             )
 
-        attention=F.softmax(
+        attention = F.softmax(
             scores,
             dim=-1
         )
 
-        attention=attention.type_as(
-            V
-        )
+        if mask is not None:
 
-        out=torch.matmul(
+            attention = attention.masked_fill(
+                ~mask,
+                0.0
+            )
+
+        out = torch.matmul(
             attention,
             V
         )
 
-        out=out.transpose(
+        out = out.transpose(
             1,
             2
         )
 
-        out=out.contiguous()
+        out = out.contiguous()
 
-        out=out.view(
+        out = out.view(
             B,
             -1,
             self.d_model
