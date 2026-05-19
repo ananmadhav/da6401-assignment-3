@@ -4,12 +4,23 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
 
-from model import Transformer, make_src_mask, make_tgt_mask
-from dataset import Multi30kDataset, collate_fn
-from lr_scheduler import NoamScheduler
+from model import Transformer
+from model import make_src_mask
+from model import make_tgt_mask
+
+from dataset import (
+    Multi30kDataset,
+    collate_fn
+)
+
+from lr_scheduler import (
+    NoamScheduler
+)
 
 
-class LabelSmoothingLoss(nn.Module):
+class LabelSmoothingLoss(
+    nn.Module
+):
 
     def __init__(
         self,
@@ -17,11 +28,18 @@ class LabelSmoothingLoss(nn.Module):
         pad_idx,
         smoothing=0.1
     ):
+
         super().__init__()
 
-        self.criterion = nn.CrossEntropyLoss(
-            ignore_index=pad_idx,
-            label_smoothing=smoothing
+        self.criterion=(
+            nn.CrossEntropyLoss(
+
+                ignore_index=
+                pad_idx,
+
+                label_smoothing=
+                smoothing
+            )
         )
 
     def forward(
@@ -37,29 +55,46 @@ class LabelSmoothingLoss(nn.Module):
 
 
 def run_epoch(
+
     data_iter,
+
     model,
+
     loss_fn,
+
     optimizer,
+
     scheduler=None,
+
     epoch_num=0,
+
     is_train=True,
+
     device="cpu"
+
 ):
 
     if is_train:
+
         model.train()
+
     else:
+
         model.eval()
 
     total_loss=0
 
     total_correct=0
+
     total_tokens=0
 
-    loop=tqdm(data_iter)
+    loop=tqdm(
+        data_iter
+    )
 
-    for step,(src,tgt) in enumerate(loop):
+    for step,(src,tgt) in enumerate(
+        loop
+    ):
 
         src=src.to(
             device,
@@ -86,84 +121,147 @@ def run_epoch(
         )
 
         if is_train:
+
             optimizer.zero_grad()
 
-        if is_train:
-            with torch.enable_grad():
+        with torch.set_grad_enabled(
+            is_train
+        ):
 
-                with torch.amp.autocast(
-                    "cuda"
-                ):
+            with torch.amp.autocast(
+                "cuda"
+            ):
 
-                    logits=model(
-                        src,
-                        tgt_input,
-                        src_mask,
-                        tgt_mask
-                    )
+                logits=model(
 
-                    logits=logits.reshape(
-                        -1,
-                        logits.shape[-1]
-                    )
+                    src,
 
-                    targets=targets.reshape(
-                        -1
-                    )
+                    tgt_input,
 
-                    loss=loss_fn(
-                        logits,
-                        targets
-                    )
+                    src_mask,
 
-                predictions=torch.argmax(
+                    tgt_mask
+
+                )
+
+                logits=logits.reshape(
+
+                    -1,
+
+                    logits.shape[-1]
+
+                )
+
+                targets=targets.reshape(
+                    -1
+                )
+
+                loss=loss_fn(
+
                     logits,
-                    dim=1
-                )
 
-                mask=(
                     targets
-                    !=
-                    model.tgt_pad_idx
+
                 )
 
-                correct=(
+            predictions=torch.argmax(
+                logits,
+                dim=1
+            )
 
-                    predictions[
-                        mask
-                    ]
+            mask=(
+                targets
+                !=
+                model.tgt_pad_idx
+            )
 
-                    ==
+            correct=(
 
-                    targets[
-                        mask
-                    ]
+                predictions[
+                    mask
+                ]
 
-                ).sum()
+                ==
 
-                total_correct+=(
-                    correct.item()
-                )
+                targets[
+                    mask
+                ]
 
-                total_tokens+=(
-                    mask.sum().item()
-                )
+            ).sum()
 
-                if torch.isnan(
-                    loss
-                ):
+            total_correct+=(
+                correct.item()
+            )
 
-                    print(
-                        "NaN detected"
-                    )
+            total_tokens+=(
+                mask.sum().item()
+            )
 
-                    continue
+            if is_train:
 
                 loss.backward()
 
+                global_step=(
+
+                    epoch_num
+                    *
+                    len(data_iter)
+
+                    +
+
+                    step
+
+                )
+
+                if global_step<1000:
+
+                    q_grad=(
+
+                        model
+                        .encoder
+                        .layers[0]
+                        .self_attn
+                        .W_q
+                        .weight
+                        .grad
+                        .norm()
+                        .item()
+
+                    )
+
+                    k_grad=(
+
+                        model
+                        .encoder
+                        .layers[0]
+                        .self_attn
+                        .W_k
+                        .weight
+                        .grad
+                        .norm()
+                        .item()
+
+                    )
+
+                    wandb.log({
+
+                        "Q_gradient_norm":
+                        q_grad,
+
+                        "K_gradient_norm":
+                        k_grad,
+
+                        "global_step":
+                        global_step
+
+                    })
+
                 torch.nn.utils.clip_grad_norm_(
+
                     model.parameters(),
+
                     max_norm=1.0
+
                 )
 
                 optimizer.step()
@@ -172,78 +270,15 @@ def run_epoch(
 
                     scheduler.step()
 
-                current_lr=(
-                    optimizer
-                    .param_groups[0]["lr"]
-                )
-
                 wandb.log({
 
                     "step_train_loss":
                     loss.item(),
 
                     "learning_rate":
-                    current_lr
+                    optimizer.param_groups[0]["lr"]
 
                 })
-
-        else:
-
-            with torch.no_grad():
-
-                logits=model(
-                    src,
-                    tgt_input,
-                    src_mask,
-                    tgt_mask
-                )
-
-                logits=logits.reshape(
-                    -1,
-                    logits.shape[-1]
-                )
-
-                targets=targets.reshape(
-                    -1
-                )
-
-                loss=loss_fn(
-                    logits,
-                    targets
-                )
-
-                predictions=torch.argmax(
-                    logits,
-                    dim=1
-                )
-
-                mask=(
-                    targets
-                    !=
-                    model.tgt_pad_idx
-                )
-
-                correct=(
-
-                    predictions[
-                        mask
-                    ]
-
-                    ==
-
-                    targets[
-                        mask
-                    ]
-
-                ).sum()
-
-                total_correct+=(
-                    correct.item()
-                )
-
-                total_tokens+=(
-                    mask.sum().item()
-                )
 
         total_loss+=loss.item()
 
@@ -267,8 +302,13 @@ def run_epoch(
     )
 
     accuracy=(
-        total_correct/
+
+        total_correct
+
+        /
+
         total_tokens
+
     )
 
     return (
@@ -278,11 +318,17 @@ def run_epoch(
 
 
 def save_checkpoint(
+
     model,
+
     optimizer,
+
     scheduler,
+
     epoch,
+
     path="checkpoint.pt"
+
 ):
 
     state={
@@ -314,20 +360,15 @@ def run_training_experiment():
 
     config={
 
-        ######################################
-        # CHANGE ONLY THESE
-        ######################################
+        ################################
 
         "experiment_name":
-        "NoamScheduler",
+        "NoScaling",
 
-        "use_noam":
-        True,
+        "use_scaling":
+        False,
 
-        "fixed_lr":
-        4e-4,
-
-        ######################################
+        ################################
 
         "epochs":
         10,
@@ -347,9 +388,11 @@ def run_training_experiment():
 
     wandb.init(
 
-        project="da6401-a3",
+        project=
+        "da6401-a3",
 
-        name=config[
+        name=
+        config[
             "experiment_name"
         ],
 
@@ -366,25 +409,31 @@ def run_training_experiment():
 
     )
 
-    train_dataset=Multi30kDataset(
-        split="train"
+    train_dataset=(
+        Multi30kDataset(
+            split="train"
+        )
     )
 
-    val_dataset=Multi30kDataset(
-        split="validation"
+    val_dataset=(
+        Multi30kDataset(
+            split="validation"
+        )
     )
 
     train_loader=DataLoader(
 
         train_dataset,
 
-        batch_size=config[
+        batch_size=
+        config[
             "batch_size"
         ],
 
         shuffle=True,
 
-        collate_fn=collate_fn,
+        collate_fn=
+        collate_fn,
 
         num_workers=4,
 
@@ -395,11 +444,13 @@ def run_training_experiment():
 
         val_dataset,
 
-        batch_size=config[
+        batch_size=
+        config[
             "batch_size"
         ],
 
-        collate_fn=collate_fn,
+        collate_fn=
+        collate_fn,
 
         num_workers=4,
 
@@ -407,54 +458,59 @@ def run_training_experiment():
     )
 
     model=Transformer(
-        checkpoint_path=None
+
+        checkpoint_path=None,
+
+        use_scaling=
+        config[
+            "use_scaling"
+        ]
+
     ).to(device)
 
     optimizer=torch.optim.Adam(
 
         model.parameters(),
 
-        lr=1 if config[
-            "use_noam"
-        ] else config[
-            "fixed_lr"
-        ],
+        lr=1,
 
-        betas=(0.9,0.98),
+        betas=
+        (
+            0.9,
+            0.98
+        ),
 
         eps=1e-9
     )
 
-    scheduler=None
+    scheduler=NoamScheduler(
 
-    if config[
-        "use_noam"
-    ]:
+        optimizer,
 
-        scheduler=NoamScheduler(
+        d_model=
+        config[
+            "d_model"
+        ],
 
-            optimizer,
+        warmup_steps=
+        config[
+            "warmup"
+        ]
+    )
 
-            d_model=config[
-                "d_model"
-            ],
+    loss_fn=(
+        LabelSmoothingLoss(
 
-            warmup_steps=config[
-                "warmup"
+            len(
+                model.tgt_vocab
+            ),
+
+            model.tgt_pad_idx,
+
+            config[
+                "label_smoothing"
             ]
         )
-
-    loss_fn=LabelSmoothingLoss(
-
-        len(
-            model.tgt_vocab
-        ),
-
-        model.tgt_pad_idx,
-
-        config[
-            "label_smoothing"
-        ]
     )
 
     best_val=float(
@@ -526,9 +582,6 @@ def run_training_experiment():
             "val_accuracy":
             val_acc,
 
-            "epoch_learning_rate":
-            optimizer.param_groups[0]["lr"],
-
             "perplexity":
             perplexity
         })
@@ -546,10 +599,6 @@ def run_training_experiment():
                 scheduler,
 
                 epoch
-            )
-
-            print(
-                f"Checkpoint saved epoch {epoch}"
             )
 
     wandb.finish()

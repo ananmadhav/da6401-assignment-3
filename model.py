@@ -34,7 +34,12 @@ def make_tgt_mask(tgt,pad_idx):
 
 class MultiHeadAttention(nn.Module):
 
-    def __init__(self,d_model,num_heads):
+    def __init__(
+        self,
+        d_model,
+        num_heads,
+        use_scaling=True
+    ):
 
         super().__init__()
 
@@ -43,6 +48,8 @@ class MultiHeadAttention(nn.Module):
         self.d_model=d_model
         self.num_heads=num_heads
         self.head_dim=d_model//num_heads
+
+        self.use_scaling=use_scaling
 
         self.W_q=nn.Linear(
             d_model,
@@ -75,7 +82,9 @@ class MultiHeadAttention(nn.Module):
         B=query.size(0)
 
         Q=self.W_q(query)
+
         K=self.W_k(key)
+
         V=self.W_v(value)
 
         Q=Q.view(
@@ -104,9 +113,11 @@ class MultiHeadAttention(nn.Module):
             K.transpose(-2,-1)
         )
 
-        scores=scores/math.sqrt(
-            self.head_dim
-        )
+        if self.use_scaling:
+
+            scores=scores/math.sqrt(
+                self.head_dim
+            )
 
         scores=scores.float()
 
@@ -127,9 +138,7 @@ class MultiHeadAttention(nn.Module):
             dim=-1
         )
 
-        attention=attention.type_as(
-            V
-        )
+        attention=attention.type_as(V)
 
         out=torch.matmul(
             attention,
@@ -150,6 +159,7 @@ class MultiHeadAttention(nn.Module):
         )
 
         return self.fc(out)
+
 
 class PositionalEncoding(nn.Module):
 
@@ -176,12 +186,17 @@ class PositionalEncoding(nn.Module):
         ).unsqueeze(1)
 
         div_term=torch.exp(
+
             torch.arange(
                 0,
                 d_model,
                 2
-            )*
+            )
+
+            *
+
             (-math.log(10000.0)/d_model)
+
         )
 
         pe[:,0::2]=torch.sin(
@@ -199,7 +214,10 @@ class PositionalEncoding(nn.Module):
             pe
         )
 
-    def forward(self,x):
+    def forward(
+        self,
+        x
+    ):
 
         x=x+self.pe[
             :,
@@ -221,19 +239,30 @@ class FeedForward(nn.Module):
         super().__init__()
 
         self.net=nn.Sequential(
+
             nn.Linear(
                 d_model,
                 d_ff
             ),
+
             nn.ReLU(),
-            nn.Dropout(dropout),
+
+            nn.Dropout(
+                dropout
+            ),
+
             nn.Linear(
                 d_ff,
                 d_model
             )
+
         )
 
-    def forward(self,x):
+    def forward(
+        self,
+        x
+    ):
+
         return self.net(x)
 
 
@@ -244,14 +273,16 @@ class EncoderLayer(nn.Module):
         d_model,
         heads,
         d_ff,
-        dropout
+        dropout,
+        use_scaling=True
     ):
 
         super().__init__()
 
         self.self_attn=MultiHeadAttention(
             d_model,
-            heads
+            heads,
+            use_scaling
         )
 
         self.ff=FeedForward(
@@ -260,22 +291,39 @@ class EncoderLayer(nn.Module):
             dropout
         )
 
-        self.norm1=nn.LayerNorm(d_model)
-        self.norm2=nn.LayerNorm(d_model)
+        self.norm1=nn.LayerNorm(
+            d_model
+        )
 
-        self.drop=nn.Dropout(dropout)
+        self.norm2=nn.LayerNorm(
+            d_model
+        )
 
-    def forward(self,x,mask):
+        self.drop=nn.Dropout(
+            dropout
+        )
+
+    def forward(
+        self,
+        x,
+        mask
+    ):
 
         x=self.norm1(
+
             x+self.drop(
+
                 self.self_attn(
-                    x,x,x,mask
+                    x,
+                    x,
+                    x,
+                    mask
                 )
             )
         )
 
         x=self.norm2(
+
             x+self.drop(
                 self.ff(x)
             )
@@ -291,19 +339,22 @@ class DecoderLayer(nn.Module):
         d_model,
         heads,
         d_ff,
-        dropout
+        dropout,
+        use_scaling=True
     ):
 
         super().__init__()
 
         self.self_attn=MultiHeadAttention(
             d_model,
-            heads
+            heads,
+            use_scaling
         )
 
         self.cross_attn=MultiHeadAttention(
             d_model,
-            heads
+            heads,
+            use_scaling
         )
 
         self.ff=FeedForward(
@@ -371,7 +422,11 @@ class Encoder(nn.Module):
             ]
         )
 
-    def forward(self,x,mask):
+    def forward(
+        self,
+        x,
+        mask
+    ):
 
         for l in self.layers:
             x=l(x,mask)
@@ -427,6 +482,7 @@ class Transformer(nn.Module):
         num_heads=8,
         d_ff=2048,
         dropout=0.1,
+        use_scaling=True,
         checkpoint_path="checkpoint.pt"
     ):
 
@@ -448,14 +504,10 @@ class Transformer(nn.Module):
         self.tgt_pad_idx=self.tgt_vocab["<pad>"]
 
         if src_vocab_size is None:
-            src_vocab_size=len(
-                self.src_vocab
-            )
+            src_vocab_size=len(self.src_vocab)
 
         if tgt_vocab_size is None:
-            tgt_vocab_size=len(
-                self.tgt_vocab
-            )
+            tgt_vocab_size=len(self.tgt_vocab)
 
         self.src_embedding=nn.Embedding(
             src_vocab_size,
@@ -475,52 +527,26 @@ class Transformer(nn.Module):
             d_model,
             num_heads,
             d_ff,
-            dropout
+            dropout,
+            use_scaling
         )
 
         dec=DecoderLayer(
             d_model,
             num_heads,
             d_ff,
-            dropout
+            dropout,
+            use_scaling
         )
 
-        self.encoder=Encoder(
-            enc,
-            N
-        )
+        self.encoder=Encoder(enc,N)
 
-        self.decoder=Decoder(
-            dec,
-            N
-        )
+        self.decoder=Decoder(dec,N)
 
         self.output_layer=nn.Linear(
             d_model,
             tgt_vocab_size
         )
-
-        if checkpoint_path:
-
-            if not os.path.exists(
-                checkpoint_path
-            ):
-
-                gdown.download(
-                    "https://drive.google.com/uc?id=12LFjvW0gHBgiFCUSn25FgsflJOaq57yf",
-                    checkpoint_path,
-                    quiet=False
-                )
-
-            state=torch.load(
-                checkpoint_path,
-                map_location="cpu"
-            )
-
-            self.load_state_dict(
-                state["model_state_dict"],
-                strict=False
-            )
 
     def encode(
         self,
@@ -545,9 +571,7 @@ class Transformer(nn.Module):
         tgt_mask
     ):
 
-        x=self.tgt_embedding(
-            tgt
-        )
+        x=self.tgt_embedding(tgt)
 
         x=self.pos(x)
 
@@ -579,79 +603,3 @@ class Transformer(nn.Module):
             tgt,
             tgt_mask
         )
-
-    def infer(
-        self,
-        german_sentence
-    ):
-
-        from train import greedy_decode
-
-        self.eval()
-
-        tokens=["<sos>"]
-
-        tokens+=[
-            t.text.lower()
-            for t in
-            self.dataset.de_tokenizer(
-                german_sentence
-            )
-        ]
-
-        tokens+=["<eos>"]
-
-        ids=[
-
-            self.src_vocab.get(
-                t,
-                self.src_vocab["<unk>"]
-            )
-
-            for t in tokens
-
-        ]
-
-        src=torch.tensor(
-            ids
-        ).unsqueeze(0)
-
-        device=next(
-            self.parameters()
-        ).device
-
-        src=src.to(device)
-
-        src_mask=make_src_mask(
-            src,
-            self.src_pad_idx
-        )
-
-        pred=greedy_decode(
-            self,
-            src,
-            src_mask,
-            40,
-            self.tgt_vocab["<sos>"],
-            self.tgt_vocab["<eos>"],
-            device
-        )
-
-        words=[]
-
-        for idx in pred[0]:
-
-            w=self.tgt_itos[
-                idx.item()
-            ]
-
-            if w in [
-                "<sos>",
-                "<eos>",
-                "<pad>"
-            ]:
-                continue
-
-            words.append(w)
-
-        return " ".join(words)
