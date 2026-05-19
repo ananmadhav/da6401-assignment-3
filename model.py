@@ -51,6 +51,8 @@ class MultiHeadAttention(nn.Module):
 
         self.use_scaling=use_scaling
 
+        self.attention_weights=None
+
         self.W_q=nn.Linear(
             d_model,
             d_model
@@ -82,28 +84,23 @@ class MultiHeadAttention(nn.Module):
         B=query.size(0)
 
         Q=self.W_q(query)
-
         K=self.W_k(key)
-
         V=self.W_v(value)
 
         Q=Q.view(
-            B,
-            -1,
+            B,-1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
         K=K.view(
-            B,
-            -1,
+            B,-1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
         V=V.view(
-            B,
-            -1,
+            B,-1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
@@ -138,7 +135,15 @@ class MultiHeadAttention(nn.Module):
             dim=-1
         )
 
-        attention=attention.type_as(V)
+        self.attention_weights=(
+            attention
+            .detach()
+            .cpu()
+        )
+
+        attention=attention.type_as(
+            V
+        )
 
         out=torch.matmul(
             attention,
@@ -186,17 +191,13 @@ class PositionalEncoding(nn.Module):
         ).unsqueeze(1)
 
         div_term=torch.exp(
-
             torch.arange(
                 0,
                 d_model,
                 2
             )
-
             *
-
             (-math.log(10000.0)/d_model)
-
         )
 
         pe[:,0::2]=torch.sin(
@@ -214,10 +215,7 @@ class PositionalEncoding(nn.Module):
             pe
         )
 
-    def forward(
-        self,
-        x
-    ):
+    def forward(self,x):
 
         x=x+self.pe[
             :,
@@ -239,29 +237,13 @@ class FeedForward(nn.Module):
         super().__init__()
 
         self.net=nn.Sequential(
-
-            nn.Linear(
-                d_model,
-                d_ff
-            ),
-
+            nn.Linear(d_model,d_ff),
             nn.ReLU(),
-
-            nn.Dropout(
-                dropout
-            ),
-
-            nn.Linear(
-                d_ff,
-                d_model
-            )
-
+            nn.Dropout(dropout),
+            nn.Linear(d_ff,d_model)
         )
 
-    def forward(
-        self,
-        x
-    ):
+    def forward(self,x):
 
         return self.net(x)
 
@@ -310,20 +292,14 @@ class EncoderLayer(nn.Module):
     ):
 
         x=self.norm1(
-
             x+self.drop(
-
                 self.self_attn(
-                    x,
-                    x,
-                    x,
-                    mask
+                    x,x,x,mask
                 )
             )
         )
 
         x=self.norm2(
-
             x+self.drop(
                 self.ff(x)
             )
@@ -460,7 +436,6 @@ class Decoder(nn.Module):
     ):
 
         for l in self.layers:
-
             x=l(
                 x,
                 memory,
@@ -519,9 +494,7 @@ class Transformer(nn.Module):
             d_model
         )
 
-        self.pos=PositionalEncoding(
-            d_model
-        )
+        self.pos=PositionalEncoding(d_model)
 
         enc=EncoderLayer(
             d_model,
@@ -540,7 +513,6 @@ class Transformer(nn.Module):
         )
 
         self.encoder=Encoder(enc,N)
-
         self.decoder=Decoder(dec,N)
 
         self.output_layer=nn.Linear(
@@ -555,7 +527,6 @@ class Transformer(nn.Module):
     ):
 
         x=self.src_embedding(src)
-
         x=self.pos(x)
 
         return self.encoder(
@@ -602,4 +573,13 @@ class Transformer(nn.Module):
             src_mask,
             tgt,
             tgt_mask
+        )
+
+    def get_last_encoder_attention(self):
+
+        return (
+            self.encoder
+            .layers[-1]
+            .self_attn
+            .attention_weights
         )

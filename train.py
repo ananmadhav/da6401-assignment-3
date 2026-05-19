@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from model import Transformer
 from model import make_src_mask
@@ -33,12 +35,8 @@ class LabelSmoothingLoss(
 
         self.criterion=(
             nn.CrossEntropyLoss(
-
-                ignore_index=
-                pad_idx,
-
-                label_smoothing=
-                smoothing
+                ignore_index=pad_idx,
+                label_smoothing=smoothing
             )
         )
 
@@ -57,44 +55,28 @@ class LabelSmoothingLoss(
 def run_epoch(
 
     data_iter,
-
     model,
-
     loss_fn,
-
     optimizer,
-
     scheduler=None,
-
     epoch_num=0,
-
     is_train=True,
-
     device="cpu"
 
 ):
 
     if is_train:
-
         model.train()
-
     else:
-
         model.eval()
 
     total_loss=0
-
     total_correct=0
-
     total_tokens=0
 
-    loop=tqdm(
-        data_iter
-    )
+    loop=tqdm(data_iter)
 
-    for step,(src,tgt) in enumerate(
-        loop
-    ):
+    for step,(src,tgt) in enumerate(loop):
 
         src=src.to(
             device,
@@ -121,7 +103,6 @@ def run_epoch(
         )
 
         if is_train:
-
             optimizer.zero_grad()
 
         with torch.set_grad_enabled(
@@ -145,11 +126,8 @@ def run_epoch(
                 )
 
                 logits=logits.reshape(
-
                     -1,
-
                     logits.shape[-1]
-
                 )
 
                 targets=targets.reshape(
@@ -157,11 +135,8 @@ def run_epoch(
                 )
 
                 loss=loss_fn(
-
                     logits,
-
                     targets
-
                 )
 
             predictions=torch.argmax(
@@ -208,7 +183,6 @@ def run_epoch(
                     len(data_iter)
 
                     +
-
                     step
 
                 )
@@ -267,7 +241,6 @@ def run_epoch(
                 optimizer.step()
 
                 if scheduler:
-
                     scheduler.step()
 
                 wandb.log({
@@ -289,10 +262,7 @@ def run_epoch(
         loop.set_postfix(
 
             avg_loss=
-
-            total_loss/
-
-            (loop.n+1)
+            total_loss/(loop.n+1)
 
         )
 
@@ -302,13 +272,8 @@ def run_epoch(
     )
 
     accuracy=(
-
-        total_correct
-
-        /
-
+        total_correct/
         total_tokens
-
     )
 
     return (
@@ -317,16 +282,126 @@ def run_epoch(
     )
 
 
+def log_attention_heads(
+    model,
+    device
+):
+
+    sentence=(
+        "a young boy is playing football in a field"
+    )
+
+    model.eval()
+
+    tokens=[
+        "<sos>"
+    ]
+
+    tokens += sentence.split()
+
+    tokens += [
+        "<eos>"
+    ]
+
+    ids=[
+
+        model.src_vocab.get(
+
+            t,
+
+            model.src_vocab["<unk>"]
+
+        )
+
+        for t in tokens
+
+    ]
+
+    src=torch.tensor(
+        ids
+    ).unsqueeze(0)
+
+    src=src.to(
+        device
+    )
+
+    src_mask=make_src_mask(
+        src,
+        model.src_pad_idx
+    )
+
+    with torch.no_grad():
+
+        x=model.src_embedding(
+            src
+        )
+
+        x=model.pos(
+            x
+        )
+
+        model.encoder(
+            x,
+            src_mask
+        )
+
+    attention=(
+        model.get_last_encoder_attention()
+    )
+
+    attention=attention[0]
+
+    for head in range(
+        attention.shape[0]
+    ):
+
+        plt.figure(
+            figsize=(8,6)
+        )
+
+        sns.heatmap(
+
+            attention[head],
+
+            xticklabels=tokens,
+
+            yticklabels=tokens,
+
+            cmap="viridis"
+
+        )
+
+        plt.xticks(
+            rotation=45
+        )
+
+        plt.yticks(
+            rotation=0
+        )
+
+        plt.title(
+            f"Encoder Head {head}"
+        )
+
+        wandb.log({
+
+            f"Head_{head}":
+
+            wandb.Image(
+                plt
+            )
+
+        })
+
+        plt.close()
+
+
 def save_checkpoint(
 
     model,
-
     optimizer,
-
     scheduler,
-
     epoch,
-
     path="checkpoint.pt"
 
 ):
@@ -360,18 +435,14 @@ def run_training_experiment():
 
     config={
 
-        ################################
-
         "experiment_name":
-        "NoScaling",
+        "AttentionHeads",
 
         "use_scaling":
-        False,
-
-        ################################
+        True,
 
         "epochs":
-        10,
+        3,
 
         "batch_size":
         64,
@@ -400,25 +471,13 @@ def run_training_experiment():
     )
 
     device=(
-
         "cuda"
-
         if torch.cuda.is_available()
-
         else "cpu"
-
     )
 
-    train_dataset=(
-        Multi30kDataset(
-            split="train"
-        )
-    )
-
-    val_dataset=(
-        Multi30kDataset(
-            split="validation"
-        )
+    train_dataset=Multi30kDataset(
+        split="train"
     )
 
     train_loader=DataLoader(
@@ -431,23 +490,6 @@ def run_training_experiment():
         ],
 
         shuffle=True,
-
-        collate_fn=
-        collate_fn,
-
-        num_workers=4,
-
-        pin_memory=True
-    )
-
-    val_loader=DataLoader(
-
-        val_dataset,
-
-        batch_size=
-        config[
-            "batch_size"
-        ],
 
         collate_fn=
         collate_fn,
@@ -498,30 +540,24 @@ def run_training_experiment():
         ]
     )
 
-    loss_fn=(
-        LabelSmoothingLoss(
+    loss_fn=LabelSmoothingLoss(
 
-            len(
-                model.tgt_vocab
-            ),
+        len(
+            model.tgt_vocab
+        ),
 
-            model.tgt_pad_idx,
+        model.tgt_pad_idx,
 
-            config[
-                "label_smoothing"
-            ]
-        )
-    )
-
-    best_val=float(
-        "inf"
+        config[
+            "label_smoothing"
+        ]
     )
 
     for epoch in range(
         config["epochs"]
     ):
 
-        train_loss,train_acc=run_epoch(
+        run_epoch(
 
             train_loader,
 
@@ -540,66 +576,10 @@ def run_training_experiment():
             device
         )
 
-        val_loss,val_acc=run_epoch(
-
-            val_loader,
-
-            model,
-
-            loss_fn,
-
-            None,
-
-            None,
-
-            epoch,
-
-            False,
-
-            device
-        )
-
-        perplexity=torch.exp(
-            torch.tensor(
-                val_loss
-            )
-        ).item()
-
-        wandb.log({
-
-            "epoch":
-            epoch,
-
-            "train_loss":
-            train_loss,
-
-            "train_accuracy":
-            train_acc,
-
-            "val_loss":
-            val_loss,
-
-            "val_accuracy":
-            val_acc,
-
-            "perplexity":
-            perplexity
-        })
-
-        if val_loss<best_val:
-
-            best_val=val_loss
-
-            save_checkpoint(
-
-                model,
-
-                optimizer,
-
-                scheduler,
-
-                epoch
-            )
+    log_attention_heads(
+        model,
+        device
+    )
 
     wandb.finish()
 
