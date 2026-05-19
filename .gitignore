@@ -8,6 +8,7 @@ checkpoint.pt
 .pytest_cache/
 .ipynb_checkpoints/
 *.pth
+*.pt
 
 data/
 hf_cache/

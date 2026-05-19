@@ -34,36 +34,35 @@ def make_tgt_mask(tgt,pad_idx):
 
 class MultiHeadAttention(nn.Module):
 
-    def __init__(self, d_model, num_heads):
+    def __init__(self,d_model,num_heads):
 
         super().__init__()
 
-        assert d_model % num_heads == 0
+        assert d_model % num_heads==0
 
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.head_dim = d_model // num_heads
+        self.d_model=d_model
+        self.num_heads=num_heads
+        self.head_dim=d_model//num_heads
 
-        self.W_q = nn.Linear(
+        self.W_q=nn.Linear(
             d_model,
             d_model
         )
 
-        self.W_k = nn.Linear(
+        self.W_k=nn.Linear(
             d_model,
             d_model
         )
 
-        self.W_v = nn.Linear(
+        self.W_v=nn.Linear(
             d_model,
             d_model
         )
 
-        self.fc = nn.Linear(
+        self.fc=nn.Linear(
             d_model,
             d_model
         )
-
 
     def forward(
         self,
@@ -73,88 +72,81 @@ class MultiHeadAttention(nn.Module):
         mask=None
     ):
 
-        B = query.size(0)
+        B=query.size(0)
 
-        Q = self.W_q(query)
-        K = self.W_k(key)
-        V = self.W_v(value)
+        Q=self.W_q(query)
+        K=self.W_k(key)
+        V=self.W_v(value)
 
-        Q = Q.view(
+        Q=Q.view(
             B,
             -1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
-        K = K.view(
+        K=K.view(
             B,
             -1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
-        V = V.view(
+        V=V.view(
             B,
             -1,
             self.num_heads,
             self.head_dim
         ).transpose(1,2)
 
-        scores = torch.matmul(
+        scores=torch.matmul(
             Q,
             K.transpose(-2,-1)
         )
 
-        scores = scores / math.sqrt(
+        scores=scores/math.sqrt(
             self.head_dim
         )
 
+        # IMPORTANT:
+        # force fp32 before masking
+        # prevents AMP/FP16 overflow
+        scores=scores.float()
+
         if mask is not None:
 
-            mask = mask.bool()
+            if mask.dim()==3:
+                mask=mask.unsqueeze(1)
 
-            while mask.dim() < scores.dim():
-                mask = mask.unsqueeze(1)
+            mask=mask.bool()
 
-            mask = mask.expand(
-                B,
-                self.num_heads,
-                scores.size(-2),
-                scores.size(-1)
-            )
-
-            scores = scores.masked_fill(
+            scores=scores.masked_fill(
                 ~mask,
                 -1e9
             )
 
-        attention = F.softmax(
+        attention=F.softmax(
             scores,
             dim=-1
         )
 
-        if mask is not None:
+        attention=attention.type_as(
+            V
+        )
 
-            attention = attention * mask.float()
-
-            attention = attention / (
-                attention.sum(
-                    dim=-1,
-                    keepdim=True
-                ) + 1e-9
-            )
-
-        out = torch.matmul(
+        out=torch.matmul(
             attention,
             V
         )
 
-        out = out.transpose(
+        out=out.transpose(
             1,
             2
         )
 
-        out = out.contiguous().view(
+        out=out.contiguous()
+
+        out=out.view(
             B,
             -1,
             self.d_model

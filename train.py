@@ -42,6 +42,7 @@ def run_epoch(
     loss_fn,
     optimizer,
     scheduler=None,
+    scaler=None,
     epoch_num=0,
     is_train=True,
     device="cpu"
@@ -56,90 +57,106 @@ def run_epoch(
 
     loop=tqdm(data_iter)
 
-    for src,tgt in loop:
+    context=(
+        torch.enable_grad()
+        if is_train
+        else torch.no_grad()
+    )
 
-        src=src.to(
-            device,
-            non_blocking=True
-        )
+    with context:
 
-        tgt=tgt.to(
-            device,
-            non_blocking=True
-        )
+        for src,tgt in loop:
 
-        tgt_input=tgt[:,:-1]
+            src=src.to(
+                device,
+                non_blocking=True
+            )
 
-        targets=tgt[:,1:]
+            tgt=tgt.to(
+                device,
+                non_blocking=True
+            )
 
-        src_mask=make_src_mask(
-            src,
-            model.src_pad_idx
-        )
+            tgt_input=tgt[:,:-1]
 
-        tgt_mask=make_tgt_mask(
-            tgt_input,
-            model.tgt_pad_idx
-        )
+            targets=tgt[:,1:]
 
-        if is_train:
-            optimizer.zero_grad()
-
-        with torch.amp.autocast("cuda"):
-
-            logits=model(
+            src_mask=make_src_mask(
                 src,
+                model.src_pad_idx
+            )
+
+            tgt_mask=make_tgt_mask(
                 tgt_input,
-                src_mask,
-                tgt_mask
+                model.tgt_pad_idx
             )
 
-            logits=logits.reshape(
-                -1,
-                logits.shape[-1]
+            if is_train:
+                optimizer.zero_grad()
+
+            with torch.amp.autocast(
+                "cuda"
+            ):
+
+                logits=model(
+                    src,
+                    tgt_input,
+                    src_mask,
+                    tgt_mask
+                )
+
+                logits=logits.reshape(
+                    -1,
+                    logits.shape[-1]
+                )
+
+                targets=targets.reshape(
+                    -1
+                )
+
+                loss=loss_fn(
+                    logits,
+                    targets
+                )
+
+            if torch.isnan(loss):
+
+                print(
+                    "NaN detected"
+                )
+
+                continue
+
+            if is_train:
+
+                scaler.scale(
+                    loss
+                ).backward()
+
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    max_norm=1.0
+                )
+
+                scaler.step(
+                    optimizer
+                )
+
+                scaler.update()
+
+                if scheduler:
+                    scheduler.step()
+
+            total_loss += loss.item()
+
+            loop.set_description(
+                f"Epoch {epoch_num}"
             )
 
-            targets=targets.reshape(
-                -1
+            loop.set_postfix(
+                avg_loss=
+                total_loss/(loop.n+1)
             )
-
-            loss=loss_fn(
-                logits,
-                targets
-            )
-
-        if torch.isnan(loss):
-
-            print(
-                "NaN detected"
-            )
-
-            continue
-
-        if is_train:
-
-            loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=1.0
-            )
-
-            optimizer.step()
-
-            if scheduler:
-                scheduler.step()
-
-        total_loss += loss.item()
-
-        loop.set_description(
-            f"Epoch {epoch_num}"
-        )
-
-        loop.set_postfix(
-            avg_loss=
-            total_loss/(loop.n+1)
-        )
 
     return total_loss/len(
         data_iter
@@ -221,11 +238,12 @@ def save_checkpoint(
     optimizer,
     scheduler,
     epoch,
-    path="checkpoint.pt"
+    path
 ):
 
     torch.save(
         {
+
             "epoch":epoch,
 
             "model_state_dict":
@@ -263,20 +281,35 @@ def run_training_experiment():
     )
 
     train_loader=DataLoader(
+
         train_dataset,
+
         batch_size=64,
+
         shuffle=True,
+
         collate_fn=collate_fn,
+
         num_workers=4,
+
         pin_memory=True
+
     )
 
     val_loader=DataLoader(
+
         val_dataset,
+
         batch_size=64,
+
+        shuffle=False,
+
         collate_fn=collate_fn,
+
         num_workers=4,
+
         pin_memory=True
+
     )
 
     model=Transformer(
@@ -284,72 +317,161 @@ def run_training_experiment():
     ).to(device)
 
     optimizer=torch.optim.Adam(
+
         model.parameters(),
+
         lr=1,
+
         betas=(0.9,0.98),
+
         eps=1e-9
+
     )
 
     scheduler=NoamScheduler(
+
         optimizer,
+
         d_model=512,
-        warmup_steps=4000
+
+        warmup_steps=8000
+
     )
 
     loss_fn=LabelSmoothingLoss(
+
         len(model.tgt_vocab),
-        model.tgt_pad_idx
+
+        model.tgt_pad_idx,
+
+        smoothing=0.05
+
     )
 
-    best_val=float(
-        "inf"
+    scaler=torch.amp.GradScaler(
+        "cuda"
     )
 
-    for epoch in range(10):
+    best_val=float("inf")
+    best_train=float("inf")
+
+    EPOCHS=20
+
+    for epoch in range(EPOCHS):
 
         train_loss=run_epoch(
+
             train_loader,
+
             model,
+
             loss_fn,
+
             optimizer,
+
             scheduler,
+
+            scaler,
+
             epoch,
+
             True,
+
             device
+
         )
 
         val_loss=run_epoch(
+
             val_loader,
+
             model,
+
             loss_fn,
+
             None,
+
             None,
+
+            None,
+
             epoch,
+
             False,
+
             device
+
         )
 
         wandb.log({
+
+            "epoch":
+            epoch,
+
             "train_loss":
             train_loss,
 
             "val_loss":
-            val_loss
+            val_loss,
+
+            "lr":
+            optimizer.param_groups[0]["lr"]
+
         })
+
+        print(
+
+            f"Epoch {epoch}"
+
+            f" train={train_loss:.4f}"
+
+            f" val={val_loss:.4f}"
+
+        )
 
         if val_loss<best_val:
 
             best_val=val_loss
 
             save_checkpoint(
+
                 model,
+
                 optimizer,
+
                 scheduler,
-                epoch
+
+                epoch,
+
+                "best_val.pt"
+
             )
 
             print(
-                f"Best checkpoint saved at epoch {epoch}"
+                "Saved best validation checkpoint"
+            )
+
+
+        if train_loss<best_train:
+
+            best_train=train_loss
+
+            save_checkpoint(
+
+                model,
+
+                optimizer,
+
+                scheduler,
+
+                epoch,
+
+                "best_train.pt"
+
+            )
+
+            print(
+                "Saved best train checkpoint"
             )
 
 
