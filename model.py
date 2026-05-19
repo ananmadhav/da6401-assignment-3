@@ -64,95 +64,109 @@ class MultiHeadAttention(nn.Module):
             d_model
         )
 
-    def forward(
-        self,
-        query,
-        key,
-        value,
-        mask=None
-    ):
+        def forward(
+            self,
+            query,
+            key,
+            value,
+            mask=None
+        ):
 
-        B = query.size(0)
+            B = query.size(0)
 
-        Q = self.W_q(query)
-        K = self.W_k(key)
-        V = self.W_v(value)
+            Q = self.W_q(query)
+            K = self.W_k(key)
+            V = self.W_v(value)
 
-        Q = Q.view(
-            B,
-            -1,
-            self.num_heads,
-            self.head_dim
-        ).transpose(1, 2)
+            Q = Q.view(
+                B,
+                -1,
+                self.num_heads,
+                self.head_dim
+            ).transpose(1,2)
 
-        K = K.view(
-            B,
-            -1,
-            self.num_heads,
-            self.head_dim
-        ).transpose(1, 2)
+            K = K.view(
+                B,
+                -1,
+                self.num_heads,
+                self.head_dim
+            ).transpose(1,2)
 
-        V = V.view(
-            B,
-            -1,
-            self.num_heads,
-            self.head_dim
-        ).transpose(1, 2)
+            V = V.view(
+                B,
+                -1,
+                self.num_heads,
+                self.head_dim
+            ).transpose(1,2)
 
-        scores = torch.matmul(
-            Q,
-            K.transpose(-2, -1)
-        )
-
-        scores = scores / math.sqrt(
-            self.head_dim
-        )
-
-        if mask is not None:
-
-
-            if mask.dim() == 3:
-                mask = mask.unsqueeze(1)
-
-            mask = mask.bool()
-
-           
-            scores = scores.masked_fill(
-                ~mask,
-                float("-inf")
+            scores = torch.matmul(
+                Q,
+                K.transpose(-2,-1)
             )
 
-        attention = F.softmax(
-            scores,
-            dim=-1
-        )
-
-        if mask is not None:
-
-            attention = attention.masked_fill(
-                ~mask,
-                0.0
+            scores = scores / math.sqrt(
+                self.head_dim
             )
 
-        out = torch.matmul(
-            attention,
-            V
-        )
+            if mask is not None:
 
-        out = out.transpose(
-            1,
-            2
-        )
+                mask = mask.bool()
 
-        out = out.contiguous()
+                # force shape:
+                # (B,1,query_len,key_len)
 
-        out = out.view(
-            B,
-            -1,
-            self.d_model
-        )
+                while mask.dim() < scores.dim():
+                    mask = mask.unsqueeze(1)
 
-        return self.fc(out)
+                mask = mask.expand(
+                    B,
+                    self.num_heads,
+                    scores.size(-2),
+                    scores.size(-1)
+                )
+
+                # apply BEFORE softmax
+                scores = scores.masked_fill(
+                    mask == 0,
+                    -1e9
+                )
+
+            attention = F.softmax(
+                scores,
+                dim=-1
+            )
+
+            # avoid leakage + NaNs
+            if mask is not None:
+
+                attention = attention * mask.float()
+
+                denom = attention.sum(
+                    dim=-1,
+                    keepdim=True
+                )
+
+                attention = attention / (
+                    denom + 1e-9
+                )
+
+            out = torch.matmul(
+                attention,
+                V
+            )
+
+            out = out.transpose(
+                1,
+                2
+            )
+
+            out = out.contiguous().view(
+                B,
+                -1,
+                self.d_model
+            )
+
+            return self.fc(out)
 
 class PositionalEncoding(nn.Module):
 
