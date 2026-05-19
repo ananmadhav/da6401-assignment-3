@@ -34,139 +34,133 @@ def make_tgt_mask(tgt,pad_idx):
 
 class MultiHeadAttention(nn.Module):
 
-    def __init__(self,d_model,num_heads):
+    def __init__(self, d_model, num_heads):
 
         super().__init__()
 
-        assert d_model % num_heads==0
+        assert d_model % num_heads == 0
 
-        self.d_model=d_model
-        self.num_heads=num_heads
-        self.head_dim=d_model//num_heads
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.head_dim = d_model // num_heads
 
-        self.W_q=nn.Linear(
+        self.W_q = nn.Linear(
             d_model,
             d_model
         )
 
-        self.W_k=nn.Linear(
+        self.W_k = nn.Linear(
             d_model,
             d_model
         )
 
-        self.W_v=nn.Linear(
+        self.W_v = nn.Linear(
             d_model,
             d_model
         )
 
-        self.fc=nn.Linear(
+        self.fc = nn.Linear(
             d_model,
             d_model
         )
 
-        def forward(
-            self,
-            query,
-            key,
-            value,
-            mask=None
-        ):
 
-            B = query.size(0)
+    def forward(
+        self,
+        query,
+        key,
+        value,
+        mask=None
+    ):
 
-            Q = self.W_q(query)
-            K = self.W_k(key)
-            V = self.W_v(value)
+        B = query.size(0)
 
-            Q = Q.view(
+        Q = self.W_q(query)
+        K = self.W_k(key)
+        V = self.W_v(value)
+
+        Q = Q.view(
+            B,
+            -1,
+            self.num_heads,
+            self.head_dim
+        ).transpose(1,2)
+
+        K = K.view(
+            B,
+            -1,
+            self.num_heads,
+            self.head_dim
+        ).transpose(1,2)
+
+        V = V.view(
+            B,
+            -1,
+            self.num_heads,
+            self.head_dim
+        ).transpose(1,2)
+
+        scores = torch.matmul(
+            Q,
+            K.transpose(-2,-1)
+        )
+
+        scores = scores / math.sqrt(
+            self.head_dim
+        )
+
+        if mask is not None:
+
+            mask = mask.bool()
+
+            while mask.dim() < scores.dim():
+                mask = mask.unsqueeze(1)
+
+            mask = mask.expand(
                 B,
-                -1,
                 self.num_heads,
-                self.head_dim
-            ).transpose(1,2)
-
-            K = K.view(
-                B,
-                -1,
-                self.num_heads,
-                self.head_dim
-            ).transpose(1,2)
-
-            V = V.view(
-                B,
-                -1,
-                self.num_heads,
-                self.head_dim
-            ).transpose(1,2)
-
-            scores = torch.matmul(
-                Q,
-                K.transpose(-2,-1)
+                scores.size(-2),
+                scores.size(-1)
             )
 
-            scores = scores / math.sqrt(
-                self.head_dim
+            scores = scores.masked_fill(
+                ~mask,
+                -1e9
             )
 
-            if mask is not None:
+        attention = F.softmax(
+            scores,
+            dim=-1
+        )
 
-                mask = mask.bool()
+        if mask is not None:
 
-                # force shape:
-                # (B,1,query_len,key_len)
+            attention = attention * mask.float()
 
-                while mask.dim() < scores.dim():
-                    mask = mask.unsqueeze(1)
-
-                mask = mask.expand(
-                    B,
-                    self.num_heads,
-                    scores.size(-2),
-                    scores.size(-1)
-                )
-
-                # apply BEFORE softmax
-                scores = scores.masked_fill(
-                    mask == 0,
-                    -1e9
-                )
-
-            attention = F.softmax(
-                scores,
-                dim=-1
-            )
-
-            # avoid leakage + NaNs
-            if mask is not None:
-
-                attention = attention * mask.float()
-
-                denom = attention.sum(
+            attention = attention / (
+                attention.sum(
                     dim=-1,
                     keepdim=True
-                )
-
-                attention = attention / (
-                    denom + 1e-9
-                )
-
-            out = torch.matmul(
-                attention,
-                V
+                ) + 1e-9
             )
 
-            out = out.transpose(
-                1,
-                2
-            )
+        out = torch.matmul(
+            attention,
+            V
+        )
 
-            out = out.contiguous().view(
-                B,
-                -1,
-                self.d_model
-            )
+        out = out.transpose(
+            1,
+            2
+        )
 
-            return self.fc(out)
+        out = out.contiguous().view(
+            B,
+            -1,
+            self.d_model
+        )
+
+        return self.fc(out)
 
 class PositionalEncoding(nn.Module):
 
